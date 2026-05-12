@@ -18,12 +18,13 @@ import type { SliceRow, TaskRow } from "./db-task-slice-rows.js";
 import type { VerificationEvidenceRow } from "./db-verification-evidence-rows.js";
 import { atomicWriteSync } from "./atomic-write.js";
 import { join } from "node:path";
-import { mkdirSync, existsSync } from "node:fs";
+import { mkdirSync, existsSync, readFileSync } from "node:fs";
 import { logWarning } from "./workflow-logger.js";
 import { isClosedStatus } from "./status-guards.js";
 import { deriveState } from "./state.js";
 import type { GSDState } from "./types.js";
 import { renderRoadmapFromDb } from "./markdown-renderer.js";
+import { readManifest } from "./workflow-manifest.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
@@ -366,8 +367,16 @@ export async function renderStateProjection(basePath: string): Promise<void> {
     const state = await deriveState(basePath);
     const content = renderStateContent(state);
     const dir = join(basePath, ".gsd");
+    const statePath = join(dir, "STATE.md");
+    if (state.progress.milestones.total === 0 && existsSync(statePath)) {
+      const manifest = readManifest(basePath);
+      if ((manifest?.milestones?.length ?? 0) > 0 && readFileSync(statePath, "utf-8").trim().length > 0) {
+        logWarning("projection", "renderStateProjection: refusing to overwrite non-empty STATE.md with empty state while manifest has milestones");
+        return;
+      }
+    }
     mkdirSync(dir, { recursive: true });
-    atomicWriteSync(join(dir, "STATE.md"), content);
+    atomicWriteSync(statePath, content);
   } catch (err) {
     logWarning("projection", `renderStateProjection failed: ${(err as Error).message}`);
   }

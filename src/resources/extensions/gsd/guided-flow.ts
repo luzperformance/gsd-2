@@ -71,6 +71,7 @@ import {
 import { verifyExpectedArtifact } from "./auto-recovery.js";
 import { createWorkspace, scopeMilestone, type MilestoneScope } from "./workspace.js";
 import { getPendingGate, extractDepthVerificationMilestoneId } from "./bootstrap/write-gate.js";
+import { readManifest } from "./workflow-manifest.js";
 
 export function shouldSkipGitBootstrapAfterInit(result: { gitEnabled?: boolean }): boolean {
   return result.gitEnabled === false;
@@ -724,14 +725,24 @@ export function checkAutoStartAfterDiscuss(): boolean {
   if (isDbAvailable()) {
     const milestoneRow = getMilestone(milestoneId);
     if (!milestoneRow) {
-      ctx.ui.notify(
-        `Milestone ${milestoneId}: discuss artifacts on disk but no DB row exists. ` +
-        `PROJECT.md may have failed to register milestones. ` +
-        `Re-save PROJECT.md with canonical "- [ ] M001: Title — One-liner" lines, ` +
-        `then re-run /gsd to recover.`,
-        "error",
-      );
-      return false;
+      let manifestHasMilestone = false;
+      try {
+        manifestHasMilestone = readManifest(basePath)?.milestones?.some(m => m.id === milestoneId) ?? false;
+      } catch (e) {
+        logWarning("guided", `R3b: failed to read state manifest: ${(e as Error).message}`);
+      }
+      if (manifestHasMilestone) {
+        logWarning("guided", `R3b: getMilestone(${milestoneId}) returned null but manifest has the row — treating as stale read`);
+      } else {
+        ctx.ui.notify(
+          `Milestone ${milestoneId}: discuss artifacts on disk but no DB row exists. ` +
+          `PROJECT.md may have failed to register milestones. ` +
+          `Re-save PROJECT.md with canonical "- [ ] M001: Title — One-liner" lines, ` +
+          `then re-run /gsd to recover.`,
+          "error",
+        );
+        return false;
+      }
     }
   }
 
