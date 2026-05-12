@@ -727,7 +727,8 @@ export function checkAutoStartAfterDiscuss(): boolean {
     if (!milestoneRow) {
       let manifestHasMilestone = false;
       try {
-        manifestHasMilestone = readManifest(basePath)?.milestones?.some(m => m.id === milestoneId) ?? false;
+        const manifest = readManifest(basePath);
+        manifestHasMilestone = Array.isArray(manifest?.milestones) && manifest.milestones.some(m => m.id === milestoneId);
       } catch (e) {
         logWarning("guided", `R3b: failed to read state manifest: ${(e as Error).message}`);
       }
