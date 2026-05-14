@@ -279,7 +279,7 @@ export function isLikelyCommand(cmd: string): boolean {
  */
 export function validateVerificationCommand(cmd: string): { ok: true } | { ok: false; reason: string } {
   if (SHELL_INJECTION_PATTERN.test(cmd)) {
-    return { ok: false, reason: "contains shell control syntax such as redirects, semicolons, backticks, or command substitution" };
+    return { ok: false, reason: "contains shell control syntax such as redirects, semicolons, backticks, command substitution, or || (logical OR/fallbacks)" };
   }
   if (!isLikelyCommand(cmd)) {
     return { ok: false, reason: "does not look like a runnable command" };
