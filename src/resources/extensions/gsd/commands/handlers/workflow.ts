@@ -44,6 +44,33 @@ import {
   validateFetchedContent,
 } from "../../workflow-install.js";
 
+function parseDiscussArgs(args: string): { target: string | null; error: string | null } {
+  const trimmed = args.trim();
+  if (!trimmed) return { target: null, error: null };
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  if (tokens.length === 1 && !tokens[0].startsWith("--")) {
+    return { target: tokens[0], error: null };
+  }
+  const milestoneFlag = tokens.indexOf("--milestone");
+  if (milestoneFlag >= 0) {
+    const target = tokens[milestoneFlag + 1];
+    if (!target || target.startsWith("--")) {
+      return { target: null, error: "Missing value for --milestone. Usage: /gsd discuss --milestone M014" };
+    }
+    return { target, error: null };
+  }
+  const sliceFlag = tokens.indexOf("--slice");
+  if (sliceFlag >= 0) {
+    const target = tokens[sliceFlag + 1];
+    if (!target || target.startsWith("--")) {
+      return { target: null, error: "Missing value for --slice. Usage: /gsd discuss --slice M014/S03" };
+    }
+    return { target, error: null };
+  }
+  return { target: null, error: `Unknown discuss arguments: "${trimmed}"` };
+}
+export const _parseDiscussArgsForTest = parseDiscussArgs;
+
 /**
  * Refuses interactive commands that mutate durable .gsd/ planning state while
  * auto-mode holds the worktree. Returns true if the command was blocked and
@@ -519,6 +546,17 @@ export async function handleWorkflowCommand(trimmed: string, ctx: ExtensionComma
   if (trimmed === "discuss") {
     if (requireNotAutoActive("/gsd discuss", ctx)) return true;
     await showDiscuss(ctx, pi, projectRoot());
+    return true;
+  }
+  if (trimmed.startsWith("discuss ")) {
+    if (requireNotAutoActive("/gsd discuss", ctx)) return true;
+    const args = trimmed.replace(/^discuss\s*/, "").trim();
+    const parsed = parseDiscussArgs(args);
+    if (parsed.error) {
+      ctx.ui.notify(parsed.error, "warning");
+      return true;
+    }
+    await showDiscuss(ctx, pi, projectRoot(), { target: parsed.target ?? undefined });
     return true;
   }
   if (trimmed === "quick" || trimmed.startsWith("quick ")) {
