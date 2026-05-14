@@ -147,6 +147,7 @@ export function shouldDegradeEmptyWorktreeToProjectRoot(
 }
 
 function unitWritesSource(unitType: string): boolean | null {
+  if (unitType.startsWith("hook/")) return false;
   const manifest = resolveManifest(unitType);
   if (!manifest) return null;
   return manifest.tools.mode === "all" || manifest.tools.mode === "docs";
