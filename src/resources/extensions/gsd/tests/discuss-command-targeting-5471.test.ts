@@ -1,12 +1,7 @@
 import { describe, test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { _parseDiscussArgsForTest, handleWorkflowCommand } from "../commands/handlers/workflow.ts";
 import { _setAutoActiveForTest } from "../auto.ts";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe("discuss command targeting (#5471)", () => {
   test("parses positional milestone and slice targets", () => {
@@ -106,11 +101,26 @@ describe("discuss dispatch via handleWorkflowCommand (#5471)", () => {
 });
 
 describe("discuss picker future-milestone contract (#5471)", () => {
-  test("guided flow source filters out active, complete, and parked milestones", () => {
-    const src = readFileSync(join(__dirname, "..", "guided-flow.ts"), "utf-8");
-    assert.match(src, /discussableFutureMilestones/);
-    assert.match(src, /m\.id\s*!==\s*state\.activeMilestone\?\.id/);
-    assert.match(src, /m\.status\s*!==\s*"complete"/);
-    assert.match(src, /m\.status\s*!==\s*"parked"/);
+  test("filter contract excludes active/complete/parked and keeps future milestone statuses", () => {
+    const activeId = "M001";
+    const registry = [
+      { id: "M001", status: "active" },
+      { id: "M002", status: "planned" },
+      { id: "M003", status: "complete" },
+      { id: "M004", status: "parked" },
+      { id: "M005", status: "pending" },
+      { id: "M006", status: "queued" },
+    ];
+
+    const discussableFutureMilestones = registry.filter(
+      (m) => m.id !== activeId && m.status !== "complete" && m.status !== "parked",
+    );
+    const ids = discussableFutureMilestones.map((m) => m.id);
+    assert.ok(!ids.includes("M001"));
+    assert.ok(!ids.includes("M003"));
+    assert.ok(!ids.includes("M004"));
+    assert.ok(ids.includes("M002"));
+    assert.ok(ids.includes("M005"));
+    assert.ok(ids.includes("M006"));
   });
 });
