@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { convertMessages } from "./openai-completions.ts";
-import type { Context, Model } from "../types.ts";
+import { convertMessages } from "./openai-completions.js";
+import type { Context, Model } from "../types.js";
 
 const baseModel: Model<"openai-completions"> = {
 	id: "local/reasoning-model",
@@ -62,10 +62,14 @@ test("convertMessages strips reasoning_content replay when compat.stripReasoning
 	const enabledCompat = { ...disabledCompat, stripReasoningContent: false };
 
 	const stripped = convertMessages(baseModel, context, disabledCompat);
-	const replayedAssistant = stripped.find((m) => m.role === "assistant") as Record<string, unknown>;
-	assert.equal(replayedAssistant.reasoning_content, undefined);
+	const replayedAssistant = stripped.find((m) => m.role === "assistant");
+	assert.ok(replayedAssistant);
+	const replayedAssistantRecord = replayedAssistant as unknown as { reasoning_content?: string };
+	assert.equal(replayedAssistantRecord.reasoning_content, undefined);
 
 	const passthrough = convertMessages(baseModel, context, enabledCompat);
-	const replayedAssistantWithReasoning = passthrough.find((m) => m.role === "assistant") as Record<string, unknown>;
-	assert.equal(replayedAssistantWithReasoning.reasoning_content, "internal chain");
+	const replayedAssistantWithReasoning = passthrough.find((m) => m.role === "assistant");
+	assert.ok(replayedAssistantWithReasoning);
+	const replayedAssistantWithReasoningRecord = replayedAssistantWithReasoning as unknown as { reasoning_content?: string };
+	assert.equal(replayedAssistantWithReasoningRecord.reasoning_content, "internal chain");
 });
