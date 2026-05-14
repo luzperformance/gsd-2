@@ -1759,23 +1759,25 @@ async function showDiscussQueuedMilestone(
   const actions = pendingMilestones.map((m, i) => {
     const hasContext = !!resolveMilestoneFile(basePath, m.id, "CONTEXT");
     const hasDraft = !hasContext && !!resolveMilestoneFile(basePath, m.id, "CONTEXT-DRAFT");
+    const hasRoadmap = !!resolveMilestoneFile(basePath, m.id, "ROADMAP");
     const contextStatus = hasContext ? "context ✓" : hasDraft ? "draft context" : "no context yet";
+    const roadmapStatus = hasRoadmap ? " · roadmap ✓" : "";
     return {
       id: m.id,
       label: `${m.id}: ${m.title}`,
-      description: `[queued] · ${contextStatus}`,
+      description: `[${m.status}] · ${contextStatus}${roadmapStatus}`,
       recommended: i === 0,
     };
   });
 
   const choice = await showNextAction(ctx, {
-    title: "GSD — Discuss a queued milestone",
+    title: "GSD — Discuss a future/planned milestone",
     summary: [
-      "Select a queued milestone to discuss.",
+      "Select a future or planned milestone to discuss.",
       "Discussing will update its context file. It will not be activated.",
     ],
     actions,
-    notYetMessage: "Run /gsd discuss when ready.",
+
   });
 
   if (choice === "not_yet") return;
