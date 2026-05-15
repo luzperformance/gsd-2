@@ -145,6 +145,16 @@ Setting `prefer_skills: []` does **not** disable skill discovery — it just mea
   - **Deprecated:** `commit_docs` — no longer valid; `.gsd/` is always gitignored. Remove this setting.
   - **Deprecated:** `merge_to_main` — no longer valid; milestone-level merge is always used. Remove this setting.
 
+- `workspace`: configures multi-repository parent workspaces. Keys:
+  - `mode`: `"project"` (default single-repo behavior) or `"parent"` (one `.gsd` controlling child repos).
+  - `repositories`: object map of repository IDs to config.
+    - Repository ID format: `^[A-Za-z0-9][A-Za-z0-9._-]*$`.
+    - Reserved ID: `project` is implicit and always maps to the project root; user-defined `workspace.repositories.project` is rejected.
+    - `path`: required relative path within the project root.
+    - `role`: optional short description of what the repo owns.
+    - `verification`: optional array of verification commands for that repo.
+    - `commit_policy`: optional `"auto"` or `"skip"` to include or skip commit actions per repo.
+
 - `unique_milestone_ids`: boolean — when `true`, generates milestone IDs in `M{seq}-{rand6}` format (e.g. `M001-eh88as`) instead of plain sequential `M001`. Prevents ID collisions in team workflows where multiple contributors create milestones concurrently. Both formats coexist — existing `M001`-style milestones remain valid. Default: `false`.
 
 - `budget_ceiling`: number — maximum dollar amount to spend on auto-mode. When reached, behavior is controlled by `budget_enforcement`. Default: no limit.

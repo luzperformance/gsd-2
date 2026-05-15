@@ -50,3 +50,21 @@ test("repository registry rejects repositories outside project root", (t) => {
     /outside project root/,
   );
 });
+
+test('repository registry rejects explicit "project" repository id', (t) => {
+  const base = mkdtempSync(join(tmpdir(), "gsd-repo-registry-"));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  mkdirSync(join(base, ".gsd"), { recursive: true });
+
+  assert.throws(
+    () => createRepositoryRegistryFromPreferences(base, {
+      workspace: {
+        mode: "parent",
+        repositories: {
+          project: { path: "." },
+        },
+      },
+    }),
+    /reserved/,
+  );
+});
