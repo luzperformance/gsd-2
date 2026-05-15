@@ -31,6 +31,8 @@ import { buildTaskFileName, gsdProjectionRoot } from "../paths.js";
 import { loadEffectiveGSDPreferences } from "../preferences.js";
 import { createRepositoryRegistryFromPreferences, type RepositoryRegistry } from "../repository-registry.js";
 
+const DEFAULT_TARGET_REPOSITORIES: readonly string[] = ["project"];
+
 export interface PlanSliceTaskInput {
   taskId: string;
   title: string;
@@ -223,7 +225,7 @@ function toTaskRows(params: PlanSliceParams): TaskRow[] {
     expected_output: task.expectedOutput,
     observability_impact: task.observabilityImpact ?? "",
     full_plan_md: task.fullPlanMd ?? "",
-    target_repositories: task.targetRepositories ?? params.targetRepositories ?? ["project"],
+    target_repositories: task.targetRepositories ?? params.targetRepositories ?? [...DEFAULT_TARGET_REPOSITORIES],
     sequence: index + 1,
     blocker_source: "",
     escalation_pending: 0,
@@ -343,7 +345,7 @@ export async function handlePlanSlice(
         proofLevel: params.proofLevel,
         integrationClosure: params.integrationClosure,
         observabilityImpact: params.observabilityImpact,
-        targetRepositories: params.targetRepositories ?? ["project"],
+        targetRepositories: params.targetRepositories ?? [...DEFAULT_TARGET_REPOSITORIES],
       });
 
       for (const taskId of omittedTaskIds) {
@@ -368,7 +370,8 @@ export async function handlePlanSlice(
           expectedOutput: task.expectedOutput,
           observabilityImpact: task.observabilityImpact ?? "",
           fullPlanMd: task.fullPlanMd,
-          targetRepositories: task.targetRepositories ?? params.targetRepositories ?? ["project"],
+          targetRepositories:
+            task.targetRepositories ?? params.targetRepositories ?? [...DEFAULT_TARGET_REPOSITORIES],
         });
       }
 
