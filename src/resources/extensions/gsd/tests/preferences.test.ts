@@ -301,7 +301,28 @@ test("workspace.repositories rejects duplicate paths with leading ./ normalizati
     },
   });
 
-  assert.ok(errors.some((e) => e.includes("workspace.repositories contains duplicate path")));
+  assert.ok(
+    errors.some((e) =>
+      e.includes("workspace.repositories.frontendAlias.path duplicates workspace.repositories.frontend.path"),
+    ),
+  );
+});
+
+test("workspace.repositories duplicate path error includes both repository ids", () => {
+  const { errors } = validatePreferences({
+    workspace: {
+      repositories: {
+        frontend: { path: "packages/app" },
+        backend: { path: "packages/app/" },
+      },
+    },
+  } as any);
+
+  assert.ok(
+    errors.some((e) =>
+      e.includes("workspace.repositories.backend.path duplicates workspace.repositories.frontend.path"),
+    ),
+  );
 });
 
 
