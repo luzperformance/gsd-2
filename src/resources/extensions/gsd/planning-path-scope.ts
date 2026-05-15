@@ -21,10 +21,11 @@ function isInsideBase(basePath: string, candidate: string): boolean {
 export function validatePlanningPathScope(
   basePath: string,
   fields: PlanningPathScopeField[],
-  allowedAbsoluteRoots?: readonly string[] | ReadonlySet<string>,
+  allowedAbsoluteRoots?: string[],
 ): string | null {
-  const allowedRoots = allowedAbsoluteRoots
-    ? Array.from(allowedAbsoluteRoots, (root) => resolve(root))
+  const hasCustomAllowedRoots = !!allowedAbsoluteRoots && allowedAbsoluteRoots.length > 0;
+  const allowedRoots = hasCustomAllowedRoots
+    ? allowedAbsoluteRoots.map((root) => resolve(root))
     : [resolve(basePath)];
 
   for (const { field, values } of fields) {
@@ -32,7 +33,10 @@ export function validatePlanningPathScope(
       const candidate = normalizePlannedFileReference(raw);
       if (!isAbsolute(candidate)) continue;
       if (allowedRoots.some((root) => isInsideBase(root, candidate))) continue;
-      return `${field} contains absolute path outside allowed roots: ${candidate}. Use a path relative to one of: ${allowedRoots.join(", ")}.`;
+      if (!hasCustomAllowedRoots) {
+        return `${field} contains absolute path outside working directory: ${candidate}. Use a path relative to ${resolve(basePath)}.`;
+      }
+      return `${field} contains absolute path outside allowed repository roots: ${candidate}.`;
     }
   }
 
