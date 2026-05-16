@@ -169,17 +169,25 @@ test("models wizard offers discovered models for enabled providers", async () =>
     "(keep current)",
   ];
   const ctx = {
+    // `getAllWithDiscovered` reads `this._all` so the wizard must call it as a
+    // method — invoking a detached reference would lose `this` and throw,
+    // mirroring the real ModelRegistry implementation.
     modelRegistry: {
-      getAvailable: () => [{ provider: "local", id: "baseline-model" }],
-      getAllWithDiscovered: () => [
+      _all: [
         { provider: "local", id: "baseline-model" },
         { provider: "local", id: "discovered-model" },
         { provider: "disabled", id: "hidden-model" },
       ],
+      getAvailable() {
+        return [{ provider: "local", id: "baseline-model" }];
+      },
+      getAllWithDiscovered() {
+        return this._all;
+      },
     },
     ui: {
       notify() {},
-      select: async (label: string, options: string[]) => {
+
         const choice = choices.shift();
         if (!choice && label === "GSD Preferences") return "── Save & Exit ──";
         if (!choice && options.includes("(keep current)")) return "(keep current)";
