@@ -320,8 +320,22 @@ exitIfManagedResourcesAreNewer(agentDir)
 
 // Early TTY check — must come before heavy initialization to avoid dangling
 // handles that prevent process.exit() from completing promptly.
-const hasSubcommand = cliFlags.messages.length > 0
-if (!process.stdin.isTTY && !isPrintMode && !hasSubcommand && !cliFlags.listModels && !cliFlags.web) {
+const knownNonInteractiveSubcommands = new Set([
+  'auto',
+  'config',
+  'graph',
+  'headless',
+  'install',
+  'list',
+  'remove',
+  'sessions',
+  'update',
+  'web',
+  'worktree',
+  'wt',
+])
+const isKnownSubcommand = knownNonInteractiveSubcommands.has(cliFlags.messages[0] ?? '')
+if (!process.stdin.isTTY && !isPrintMode && !isKnownSubcommand && !cliFlags.listModels && !cliFlags.web) {
   printNonTtyErrorAndExit(undefined, false)
 }
 
