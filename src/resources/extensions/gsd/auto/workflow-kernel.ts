@@ -279,7 +279,15 @@ export function decideEngineDispatch(input: EngineDispatchInput): EngineDispatch
 export function decideFinalizeResult(input: FinalizeInput): FinalizeDecision {
   if (input.action === "break") {
     const reason = input.reason ?? "unknown";
-    if (reason === "step-wizard") {
+    if (
+      reason === "step-wizard"
+      || reason === "post-verification-stopped"
+      || reason === "pre-verification-dispatched"
+      || reason === "uat-pause"
+      || reason === "verification-pause"
+      || reason === "finalize-pre-timeout"
+      || reason === "finalize-post-timeout"
+    ) {
       return { action: "complete-and-break" };
     }
     return {
