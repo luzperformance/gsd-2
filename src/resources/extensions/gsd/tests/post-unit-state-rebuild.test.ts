@@ -131,3 +131,42 @@ test("postUnitPreVerification refreshes DB before checking execute-task completi
     rmSync(base, { recursive: true, force: true });
   }
 });
+
+test("postUnitPreVerification pauses instead of retrying when closeout failure marker exists", async () => {
+  const base = mkdtempSync(join(tmpdir(), "gsd-post-unit-failure-marker-"));
+  try {
+    const milestoneDir = join(base, ".gsd", "milestones", "M001");
+    mkdirSync(milestoneDir, { recursive: true });
+    openDatabase(join(base, ".gsd", "gsd.db"));
+    writeFileSync(
+      join(milestoneDir, "M001-VERIFICATION-FAILED.md"),
+      "# Verification Failed\n\nverdict: needs-attention\n",
+    );
+
+    const s = new AutoSession();
+    s.basePath = base;
+    s.originalBasePath = base;
+    s.currentMilestoneId = "M001";
+    s.currentUnit = { type: "complete-milestone", id: "M001", startedAt: Date.now() };
+
+    let pauseCalls = 0;
+    const result = await postUnitPreVerification({
+      s,
+      ctx: { ui: { notify() {} } } as any,
+      pi: {} as any,
+      buildSnapshotOpts: () => ({}),
+      lockBase: () => base,
+      stopAuto: async () => {},
+      pauseAuto: async () => { pauseCalls += 1; },
+      updateProgressWidget: () => {},
+    }, { skipSettleDelay: true, skipWorktreeSync: true });
+
+    assert.equal(result, "dispatched");
+    assert.equal(pauseCalls, 1);
+    assert.equal(s.pendingVerificationRetry, null);
+    assert.equal(s.verificationRetryCount.size, 0);
+  } finally {
+    closeDatabase();
+    rmSync(base, { recursive: true, force: true });
+  }
+});
