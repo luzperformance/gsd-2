@@ -320,7 +320,12 @@ exitIfManagedResourcesAreNewer(agentDir)
 
 // Early TTY check — must come before heavy initialization to avoid dangling
 // handles that prevent process.exit() from completing promptly.
-const knownNonInteractiveSubcommands = new Set([
+// Subcommands exempt from the early non-TTY guard.
+// They are allowed past this gate and must enforce any command-specific TTY
+// requirements themselves (for example, `sessions` can be interactive).
+// Keep this list in sync with implemented CLI subcommands: if a legitimate
+// command is missing here, non-TTY invocation will fail early with a TTY error.
+const subcommandsExemptFromEarlyTtyCheck = new Set([
   'auto',
   'config',
   'graph',
@@ -334,8 +339,8 @@ const knownNonInteractiveSubcommands = new Set([
   'worktree',
   'wt',
 ])
-const isKnownSubcommand = knownNonInteractiveSubcommands.has(cliFlags.messages[0] ?? '')
-if (!process.stdin.isTTY && !isPrintMode && !isKnownSubcommand && !cliFlags.listModels && !cliFlags.web) {
+const isSubcommandExemptFromEarlyTtyCheck = subcommandsExemptFromEarlyTtyCheck.has(cliFlags.messages[0] ?? '')
+if (!process.stdin.isTTY && !isPrintMode && !isSubcommandExemptFromEarlyTtyCheck && !cliFlags.listModels && !cliFlags.web) {
   printNonTtyErrorAndExit(undefined, false)
 }
 
