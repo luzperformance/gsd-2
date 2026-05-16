@@ -265,6 +265,7 @@ export function clearStaleWorkerLock(basePath: string): void {
     if (!worker) return;
     markLatestActiveForWorkerCanceled(worker.worker_id, "crash-recovered");
     markWorkerCrashed(worker.worker_id);
+    forceReleaseLeasesForWorker(worker.worker_id);
     deleteRuntimeKv("worker", worker.worker_id, SESSION_FILE_KV_KEY);
   } catch {
     // Best-effort.

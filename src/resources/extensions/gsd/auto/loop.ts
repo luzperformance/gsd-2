@@ -40,9 +40,10 @@ import {
   markFailed as markDispatchFailed,
   getRecentForUnit as getRecentDispatchesForUnit,
   getRecentUnitKeysForProjectRoot,
+  markLatestActiveForWorkerCanceled,
 } from "../db/unit-dispatches.js";
-import { claimMilestoneLease, refreshMilestoneLease } from "../db/milestone-leases.js";
-import { heartbeatAutoWorker } from "../db/auto-workers.js";
+import { claimMilestoneLease, refreshMilestoneLease, forceReleaseLeasesForWorker } from "../db/milestone-leases.js";
+import { heartbeatAutoWorker, getAutoWorker, markWorkerCrashed } from "../db/auto-workers.js";
 import { getRuntimeKv, setRuntimeKv } from "../db/runtime-kv.js";
 import { resolveUokFlags } from "../uok/flags.js";
 import { scheduleSidecarQueue } from "../uok/execution-graph.js";
@@ -100,6 +101,21 @@ import {
 } from "./workflow-custom-engine-verify-outcome.js";
 import { handleCustomEngineReconcile } from "./workflow-custom-engine-reconcile.js";
 import { handleCustomEngineReconcileOutcome } from "./workflow-custom-engine-reconcile-outcome.js";
+
+function isDeadLocalLeaseHolder(workerId: string, projectRoot: string): boolean {
+  const worker = getAutoWorker(workerId);
+  if (!worker) return false;
+  if (worker.status !== "active") return false;
+  if (worker.project_root_realpath !== projectRoot) return false;
+  if (!Number.isInteger(worker.pid) || worker.pid <= 0) return true;
+  if (worker.pid === process.pid) return false;
+  try {
+    process.kill(worker.pid, 0);
+    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== "EPERM";
+  }
+}
 
 // ── Stuck detection persistence (#3704) ──────────────────────────────────
 // Phase C migration: stuck-state.json deleted in favor of DB-backed
@@ -856,11 +872,33 @@ export async function autoLoop(
       // process has a worker identity, make the milestone lease explicit before
       // claiming so a step-mode handoff cannot leave us running with a stale
       // in-memory token and no backing lease row.
-      const leaseBeforeClaim = ensureDispatchLease(s, iterData.mid, {
+      let leaseBeforeClaim = ensureDispatchLease(s, iterData.mid, {
         claimMilestoneLease,
         logLeaseRecovered: logDispatchLeaseRecovered,
         logLeaseRecoveryFailed: logDispatchLeaseRecoveryFailed,
       });
+      if (leaseBeforeClaim.kind === "blocked" && leaseBeforeClaim.holderWorkerId) {
+        const holderWorkerId = leaseBeforeClaim.holderWorkerId;
+        if (isDeadLocalLeaseHolder(holderWorkerId, s.canonicalProjectRoot)) {
+          markLatestActiveForWorkerCanceled(holderWorkerId, "crash-recovered");
+          markWorkerCrashed(holderWorkerId);
+          forceReleaseLeasesForWorker(holderWorkerId);
+          const retryLease = ensureDispatchLease(s, iterData.mid, {
+            claimMilestoneLease,
+            logLeaseRecovered: logDispatchLeaseRecovered,
+            logLeaseRecoveryFailed: logDispatchLeaseRecoveryFailed,
+          }, { forceReclaim: true });
+          if (retryLease.kind === "ready") {
+            leaseBeforeClaim = retryLease;
+          } else {
+            const msg = `Lost milestone lease for ${iterData.mid ?? "unknown"} before dispatching ${iterData.unitType} ${iterData.unitId}: ${retryLease.reason}`;
+            ctx.ui.notify(msg, "error");
+            finishTurn("stopped", "execution", msg);
+            await deps.stopAuto(ctx, pi, msg);
+            break;
+          }
+        }
+      }
       if (leaseBeforeClaim.kind === "blocked" || leaseBeforeClaim.kind === "failed") {
         const msg = `Lost milestone lease for ${iterData.mid ?? "unknown"} before dispatching ${iterData.unitType} ${iterData.unitId}: ${leaseBeforeClaim.reason}`;
         ctx.ui.notify(msg, "error");

@@ -12,7 +12,7 @@ export type DispatchClaimOutcome =
 export type DispatchLeaseOutcome =
   | { kind: "ready"; token: number; recovered: boolean }
   | { kind: "degraded"; reason: "missing-worker" | "missing-milestone" }
-  | { kind: "blocked"; reason: string }
+  | { kind: "blocked"; reason: string; holderWorkerId?: string }
   | { kind: "failed"; reason: string };
 
 type ClaimMilestoneLeaseResult =
@@ -87,7 +87,7 @@ export function ensureDispatchLease(
     if (!claim.ok) {
       const reason = `Milestone ${milestoneId} is held by worker ${claim.byWorker} until ${claim.expiresAt}.`;
       deps.logLeaseRecoveryFailed({ milestoneId, workerId: s.workerId, reason });
-      return { kind: "blocked", reason };
+      return { kind: "blocked", reason, holderWorkerId: claim.byWorker };
     }
 
     s.currentMilestoneId = milestoneId;
