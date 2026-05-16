@@ -722,6 +722,10 @@ describe("workflow MCP tools", () => {
         expectedOutput: ["T02-PLAN.md"],
       });
 
+      _getAdapter()!
+        .prepare("UPDATE tasks SET status = 'active' WHERE milestone_id = ? AND slice_id = ? AND id = ?")
+        .run("M001", "S01", "T02");
+
       const skipResult = await skipTool!.handler({
         projectDir: base,
         milestoneId: "M001",
