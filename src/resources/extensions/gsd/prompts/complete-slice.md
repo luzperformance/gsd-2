@@ -27,7 +27,7 @@ Use `subagent` only for fresh-context review when useful: reviewer for cross-cut
 5. If verification fails:
    - For task-specific regressions (failure in files this task touched, absent before it ran — confirm via git diff and pre-task verification output): call `gsd_task_reopen` with that task and a concrete reason.
    - For inherited/out-of-scope failures (pre-existed this slice or affects files outside it — e.g., CI baseline, upstream regressions): do **not** reopen completed tasks; call `gsd_replan_slice` with the blocker and adjusted verification scope or follow-up tasks.
-   - For other plan-invalidating failures (emerged during slice work and breaks execution assumptions — e.g., API contract changed, required dependency missing): call `gsd_replan_slice` with the blocker and updated execution tasks.
+   - For other plan-invalidating failures (breaks execution assumptions — e.g., API contract changed, required dependency missing): call `gsd_replan_slice` with the blocker and updated execution tasks.
    Then stop with: "Slice {{sliceId}} needs execution follow-up."
 6. Task summaries use a flat file layout under `tasks/` such as `T01-SUMMARY.md`, not inside per-task subdirectories like `tasks/T01/SUMMARY.md`. Never use `tasks/*/SUMMARY.md`.
 7. If observability/diagnostics were planned, verify them unless the slice is simple.
