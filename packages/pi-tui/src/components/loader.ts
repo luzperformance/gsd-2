@@ -53,6 +53,7 @@ export class Loader extends Text {
 				this.ui.requestRender();
 			}
 		}, 80);
+		this.intervalId.unref?.();
 		// Trigger initial render
 		if (this.ui) {
 			this.ui.requestRender();

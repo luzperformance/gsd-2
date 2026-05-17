@@ -46,6 +46,7 @@ export class DynamicBorder implements Component {
 				ui.requestRender();
 			}
 		}, 200);
+		this.spinnerInterval.unref?.();
 		ui.requestRender();
 	}
 
