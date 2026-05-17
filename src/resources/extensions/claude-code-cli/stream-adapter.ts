@@ -62,6 +62,8 @@ type ToolCallWithExternalResult = ToolCall & {
 /** `SimpleStreamOptions` extended with an optional extension UI context for elicitation dialogs. */
 interface ClaudeCodeStreamOptions extends SimpleStreamOptions {
 	extensionUIContext?: ExtensionUIContext;
+	onExternalToolCall?: (toolCall: ToolCall) => Promise<void> | void;
+	onExternalToolResult?: (event: { toolCall: ToolCall; result: ExternalToolResultPayload }) => Promise<void> | void;
 }
 
 /** Resolve the workspace root for local Claude Code process execution. */
@@ -1714,6 +1716,8 @@ async function pumpSdkMessages(
 		const queryPrompt = buildSdkQueryPrompt(context, prompt);
 		const permissionMode = await resolveClaudePermissionMode();
 		const uiContext = (options as ClaudeCodeStreamOptions | undefined)?.extensionUIContext;
+		const onExternalToolCall = (options as ClaudeCodeStreamOptions | undefined)?.onExternalToolCall;
+		const onExternalToolResult = (options as ClaudeCodeStreamOptions | undefined)?.onExternalToolResult;
 		const cwd = resolveClaudeCodeCwd(options);
 		const canUseToolHandler = createClaudeCodeCanUseToolHandler(uiContext);
 		// When no UI is available (headless / auto-mode), auto-approve all
@@ -1797,6 +1801,9 @@ async function pumpSdkMessages(
 					const assistantEvent = builder.handleEvent(event);
 					if (assistantEvent) {
 						stream.push(assistantEvent);
+						if (assistantEvent.type === "toolcall_start" && assistantEvent.toolCall) {
+							void Promise.resolve(onExternalToolCall?.(assistantEvent.toolCall)).catch(() => {});
+						}
 					}
 					break;
 				}
@@ -1851,6 +1858,10 @@ async function pumpSdkMessages(
 							// Push synthetic completion events with result attached so the
 							// chat-controller can update pending ToolExecutionComponents.
 							if (block.type === "toolCall") {
+								void Promise.resolve(onExternalToolResult?.({
+									toolCall: block,
+									result: extResult,
+								})).catch(() => {});
 								stream.push({
 									type: "toolcall_end",
 									contentIndex,
