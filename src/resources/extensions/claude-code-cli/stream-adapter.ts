@@ -66,6 +66,23 @@ interface ClaudeCodeStreamOptions extends SimpleStreamOptions {
 	onExternalToolResult?: (event: { toolCall: ToolCall; result: ExternalToolResultPayload }) => Promise<void> | void;
 }
 
+function serverToolUseToToolCallLike(block: {
+	id: string;
+	name: string;
+	input: unknown;
+}): ToolCall {
+	const argumentsValue =
+		block.input && typeof block.input === "object" && !Array.isArray(block.input)
+			? (block.input as Record<string, unknown>)
+			: { input: block.input };
+	return {
+		type: "toolCall",
+		id: block.id,
+		name: block.name,
+		arguments: argumentsValue,
+	};
+}
+
 /** Resolve the workspace root for local Claude Code process execution. */
 export function resolveClaudeCodeCwd(options?: SimpleStreamOptions): string {
 	return options?.cwd && options.cwd.trim().length > 0 ? options.cwd : process.cwd();
@@ -1802,7 +1819,11 @@ async function pumpSdkMessages(
 					if (assistantEvent) {
 						stream.push(assistantEvent);
 						if (assistantEvent.type === "toolcall_start" && assistantEvent.toolCall) {
-							void Promise.resolve(onExternalToolCall?.(assistantEvent.toolCall)).catch(() => {});
+							try {
+								await onExternalToolCall?.(assistantEvent.toolCall);
+							} catch (error) {
+								console.warn("[claude-code] onExternalToolCall callback failed:", error);
+							}
 						}
 					}
 					break;
@@ -1858,10 +1879,14 @@ async function pumpSdkMessages(
 							// Push synthetic completion events with result attached so the
 							// chat-controller can update pending ToolExecutionComponents.
 							if (block.type === "toolCall") {
-								void Promise.resolve(onExternalToolResult?.({
-									toolCall: block,
-									result: extResult,
-								})).catch(() => {});
+								try {
+									await onExternalToolResult?.({
+										toolCall: block,
+										result: extResult,
+									});
+								} catch (error) {
+									console.warn("[claude-code] onExternalToolResult callback failed:", error);
+								}
 								stream.push({
 									type: "toolcall_end",
 									contentIndex,
@@ -1869,6 +1894,14 @@ async function pumpSdkMessages(
 									partial: builder.message,
 								});
 							} else if (block.type === "serverToolUse") {
+								try {
+									await onExternalToolResult?.({
+										toolCall: serverToolUseToToolCallLike(block),
+										result: extResult,
+									});
+								} catch (error) {
+									console.warn("[claude-code] onExternalToolResult callback failed:", error);
+								}
 								stream.push({
 									type: "server_tool_use",
 									contentIndex,
