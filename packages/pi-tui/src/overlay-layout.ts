@@ -1,3 +1,5 @@
+// GSD-2 + packages/pi-tui/src/overlay-layout.ts - Overlay layout resolution, compositing, and rendering utilities.
+
 /**
  * Overlay layout resolution, compositing, and rendering utilities.
  *
@@ -261,6 +263,9 @@ export function compositeLineAt(
 	if (resultWidth <= totalWidth) {
 		return result;
 	}
+	console.warn(
+		`[pi-tui] compositeLineAt truncated overflow from ${resultWidth} to ${totalWidth} columns (startCol=${startCol}, overlayWidth=${overlayWidth})`,
+	);
 	// Truncate with strict=true to ensure we don't exceed totalWidth
 	return sliceByColumn(result, 0, totalWidth, true);
 }

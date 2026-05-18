@@ -15,6 +15,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { applyLineResets, compositeLineAt, compositeOverlays, type OverlayEntry } from "../overlay-layout.js";
+import { visibleWidth } from "../utils.js";
 
 function makeEntry(
 	lines: string[],
@@ -242,5 +243,24 @@ describe("compositeOverlays — backdrop", () => {
 		// the row ordering changes.
 		const overlayRow = result.find((l) => stripAnsi(l).includes("XX"));
 		assert.ok(overlayRow, "overlay text should be composited into some rendered row");
+	});
+});
+
+describe("compositeLineAt", () => {
+	it("warns when defensive truncation masks an upstream width overflow", () => {
+		const previousWarn = console.warn;
+		const warnings: string[] = [];
+		console.warn = (message?: unknown) => {
+			warnings.push(String(message));
+		};
+		try {
+			const result = compositeLineAt("", "ABCDE", 5, 5, 4);
+
+			assert.equal(visibleWidth(result), 4);
+			assert.equal(warnings.length, 1);
+			assert.match(warnings[0], /\[pi-tui\] compositeLineAt truncated overflow from \d+ to 4 columns/);
+		} finally {
+			console.warn = previousWarn;
+		}
 	});
 });
