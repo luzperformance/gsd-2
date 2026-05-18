@@ -65,6 +65,25 @@ export function isFocusable(component: Component | null): component is Component
 	return component !== null && "focused" in component;
 }
 
+function getComponentDebugName(component: Component): string {
+	const name = component.constructor?.name;
+	return name && name !== "Object" ? name : "anonymous component";
+}
+
+function warnOnRenderWidthOverflow(component: Component, lines: string[], width: number): void {
+	if (process.env.PI_TUI_DEBUG !== "1" || width <= 0) return;
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		if (isImageLine(line)) continue;
+		const lineWidth = visibleWidth(line);
+		if (lineWidth > width) {
+			console.warn(
+				`[pi-tui] ${getComponentDebugName(component)}.render() line ${i + 1} exceeds width ${width} (visible width ${lineWidth})`,
+			);
+		}
+	}
+}
+
 /**
  * Cursor position marker - APC (Application Program Command) sequence.
  * This is a zero-width escape sequence that terminals ignore.
@@ -220,6 +239,9 @@ export class Container implements Component {
 		const lines: string[] = [];
 		for (const child of this.children) {
 			const rendered = child.render(width);
+			if (!(child instanceof Container)) {
+				warnOnRenderWidthOverflow(child, rendered, width);
+			}
 			for (let i = 0; i < rendered.length; i++) lines.push(rendered[i]);
 		}
 		// Return stable reference if output unchanged — allows doRender()

@@ -284,4 +284,66 @@ describe("Container", () => {
 		assert.notEqual(afterInvalidate, first, "invalidate must force a fresh render reference for the TUI frame pipeline");
 		assert.deepEqual(afterInvalidate, ["same"]);
 	});
+
+	it("warns in PI_TUI_DEBUG when a child render line exceeds the requested width", () => {
+		const previousDebug = process.env.PI_TUI_DEBUG;
+		const previousWarn = console.warn;
+		const warnings: string[] = [];
+		class WideComponent implements Component {
+			render(): string[] {
+				return ["too wide"];
+			}
+
+			invalidate(): void {}
+		}
+
+		process.env.PI_TUI_DEBUG = "1";
+		console.warn = (message?: unknown) => {
+			warnings.push(String(message));
+		};
+		try {
+			const c = new Container();
+			c.addChild(new WideComponent());
+
+			assert.deepEqual(c.render(3), ["too wide"]);
+			assert.deepEqual(warnings, [
+				"[pi-tui] WideComponent.render() line 1 exceeds width 3 (visible width 8)",
+			]);
+		} finally {
+			console.warn = previousWarn;
+			if (previousDebug === undefined) {
+				delete process.env.PI_TUI_DEBUG;
+			} else {
+				process.env.PI_TUI_DEBUG = previousDebug;
+			}
+		}
+	});
+
+	it("does not warn about render width overflow outside PI_TUI_DEBUG", () => {
+		const previousDebug = process.env.PI_TUI_DEBUG;
+		const previousWarn = console.warn;
+		const warnings: string[] = [];
+
+		delete process.env.PI_TUI_DEBUG;
+		console.warn = (message?: unknown) => {
+			warnings.push(String(message));
+		};
+		try {
+			const c = new Container();
+			c.addChild({
+				render: () => ["too wide"],
+				invalidate() {},
+			});
+
+			assert.deepEqual(c.render(3), ["too wide"]);
+			assert.deepEqual(warnings, []);
+		} finally {
+			console.warn = previousWarn;
+			if (previousDebug === undefined) {
+				delete process.env.PI_TUI_DEBUG;
+			} else {
+				process.env.PI_TUI_DEBUG = previousDebug;
+			}
+		}
+	});
 });
