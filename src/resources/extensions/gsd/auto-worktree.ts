@@ -20,7 +20,7 @@ import {
   unlinkSync,
   lstatSync as lstatSyncFn,
 } from "node:fs";
-import { isAbsolute, join, relative, sep as pathSep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep as pathSep } from "node:path";
 import { GSDError, GSD_IO_ERROR, GSD_GIT_ERROR } from "./errors.js";
 import {
   reconcileWorktreeDb,
@@ -427,9 +427,15 @@ export const isSafeToAutoResolve = (filePath: string): boolean =>
 
 function removeMergeStateFiles(basePath: string, contextLabel: string): void {
   try {
-    const gitDir_ = resolveGitDir(basePath);
-    for (const f of ["SQUASH_MSG", "MERGE_MSG", "MERGE_HEAD"]) {
-      const p = join(gitDir_, f);
+    for (const f of ["SQUASH_MSG", "MERGE_MSG", "MERGE_MODE", "MERGE_HEAD", "AUTO_MERGE"]) {
+      const rawPath = execFileSync("git", ["rev-parse", "--git-path", f], {
+        cwd: basePath,
+        stdio: ["ignore", "pipe", "pipe"],
+        encoding: "utf-8",
+      }).trim();
+      const p = rawPath.length > 0
+        ? (isAbsolute(rawPath) ? rawPath : resolve(basePath, rawPath))
+        : join(resolveGitDir(basePath), f);
       if (existsSync(p)) unlinkSync(p);
     }
   } catch (err) {
