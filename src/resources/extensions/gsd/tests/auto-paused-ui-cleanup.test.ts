@@ -126,7 +126,7 @@ test("cleanupAfterLoopExit clears status and progress widget without replacing o
   }
 });
 
-test("cleanupAfterLoopExit clears progress widget after stopAuto reset", async () => {
+test("cleanupAfterLoopExit preserves completion roll-up after stopAuto reset", async () => {
   const statusCalls: unknown[] = [];
   const widgetCalls: unknown[] = [];
 
@@ -150,8 +150,8 @@ test("cleanupAfterLoopExit clears progress widget after stopAuto reset", async (
     assert.deepEqual(statusCalls, [["gsd-auto", undefined]]);
     assert.equal(
       widgetCalls.some((args) => Array.isArray(args) && args[0] === "gsd-progress" && args[1] === undefined),
-      true,
-      "completion cleanup must clear the stale progress widget",
+      false,
+      "post-loop completion cleanup must leave the final roll-up widget visible",
     );
     assert.equal(
       widgetCalls.some((args) => Array.isArray(args) && args[0] === "gsd-outcome"),
@@ -466,21 +466,23 @@ test("stopAuto completion closeout reroots session, restores cwd, and preserves 
   } as any;
 
   try {
-    await stopAuto(
-      {
-        hasUI: true,
-        ui: {
-          setStatus: () => {},
-          setWidget: (key: string, value: unknown) => {
-            widgetCalls.push([key, value]);
-          },
-          setHeader: () => {},
-          notify: (message: string) => {
-            notifications.push(message);
-          },
+    const ctx = {
+      hasUI: true,
+      ui: {
+        setStatus: () => {},
+        setWidget: (key: string, value: unknown) => {
+          widgetCalls.push([key, value]);
         },
-        modelRegistry: { find: () => null },
-      } as any,
+        setHeader: () => {},
+        notify: (message: string) => {
+          notifications.push(message);
+        },
+      },
+      modelRegistry: { find: () => null },
+    } as any;
+
+    await stopAuto(
+      ctx,
       { events: { emit: () => {} } } as any,
       "Milestone M003 complete",
       {
@@ -529,6 +531,15 @@ test("stopAuto completion closeout reroots session, restores cwd, and preserves 
     assert.ok(
       widgetCalls.every(([key, value]) => key !== "gsd-outcome" || value === undefined),
       "completion stop should use the roll-up as the single final surface",
+    );
+
+    const widgetCallCountBeforePostLoopCleanup = widgetCalls.length;
+    await cleanupAfterLoopExit(ctx);
+    const postLoopWidgetCalls = widgetCalls.slice(widgetCallCountBeforePostLoopCleanup);
+    assert.equal(
+      postLoopWidgetCalls.some(([key, value]) => key === "gsd-progress" && value === undefined),
+      false,
+      "outer auto-loop cleanup must not clear the final completion roll-up after stopAuto returns",
     );
   } finally {
     try { closeDatabase(); } catch { /* noop */ }

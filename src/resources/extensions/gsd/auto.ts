@@ -1100,6 +1100,7 @@ export async function rerootCommandSession(
 
 export async function cleanupAfterLoopExit(ctx: ExtensionContext): Promise<void> {
   const preserveStepSurface = s.preserveStepSurfaceAfterLoopExit;
+  const preserveCompletionSurface = s.completionStopInProgress;
   const preservePausedSurface = s.paused;
   s.currentUnit = null;
   s.active = false;
@@ -1125,6 +1126,9 @@ export async function cleanupAfterLoopExit(ctx: ExtensionContext): Promise<void>
   if (!s.paused) {
     if (preserveStepSurface) {
       s.preserveStepSurfaceAfterLoopExit = false;
+    } else if (preserveCompletionSurface) {
+      ctx.ui.setStatus("gsd-auto", undefined);
+      s.completionStopInProgress = false;
     } else {
       ctx.ui.setStatus("gsd-auto", undefined);
       ctx.ui.setWidget("gsd-progress", undefined);
