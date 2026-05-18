@@ -14,19 +14,22 @@ import assert from 'node:assert/strict'
 const EXIT_SUCCESS = 0
 const EXIT_ERROR = 1
 const EXIT_BLOCKED = 10
+const EXIT_CANCELLED = 11
 
 function mapStatusToExitCode(status: string): number {
   switch (status) {
     case 'success':
     case 'complete':
+    case 'completed':
       return EXIT_SUCCESS
     case 'error':
     case 'timeout':
       return EXIT_ERROR
     case 'blocked':
+    case 'paused':
       return EXIT_BLOCKED
     case 'cancelled':
-      return 11
+      return EXIT_CANCELLED
     default:
       return EXIT_ERROR
   }
@@ -34,18 +37,27 @@ function mapStatusToExitCode(status: string): number {
 
 // ─── Extracted terminal detection (mirrors headless-events.ts) ──────────────
 
-const TERMINAL_PREFIXES = ['auto-mode stopped', 'step-mode stopped']
+const PAUSED_PREFIXES = ['auto-mode paused', 'step-mode paused']
+const TERMINAL_PREFIXES = ['auto-mode stopped', 'step-mode stopped', ...PAUSED_PREFIXES]
+
+function isManualResolutionNotification(message: string): boolean {
+  return (
+    message.includes('resolve manually and re-run /gsd auto') ||
+    message.includes('resolve conflicts manually and run /gsd auto to resume') ||
+    message.includes('resolve and run /gsd auto to resume')
+  )
+}
 
 function isTerminalNotification(event: Record<string, unknown>): boolean {
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
-  return TERMINAL_PREFIXES.some((prefix) => message.startsWith(prefix))
+  return TERMINAL_PREFIXES.some((prefix) => message.startsWith(prefix)) || isManualResolutionNotification(message)
 }
 
 function isBlockedNotification(event: Record<string, unknown>): boolean {
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
-  return message.includes('blocked:')
+  return message.includes('blocked:') || PAUSED_PREFIXES.some((prefix) => message.startsWith(prefix)) || isManualResolutionNotification(message)
 }
 
 // ─── Mock RpcClient ─────────────────────────────────────────────────────────
@@ -254,6 +266,36 @@ test('v1 fallback: blocked notification sets blocked flag', () => {
 
   handleEvent(
     { type: 'extension_ui_request', method: 'notify', id: 'n1', message: 'Auto-mode stopped (Blocked: plan invalid)' },
+    state,
+    client,
+  )
+
+  assert.equal(state.completed, true)
+  assert.equal(state.blocked, true)
+  assert.equal(state.exitCode, EXIT_BLOCKED)
+})
+
+test('v1 fallback: pause notification sets blocked flag', () => {
+  const client = new MockRpcClient()
+  const state: EventHandlerState = { completed: false, blocked: false, exitCode: -1, v2Enabled: false }
+
+  handleEvent(
+    { type: 'extension_ui_request', method: 'notify', id: 'n1', message: 'Auto-mode paused due to provider error: invalid api key' },
+    state,
+    client,
+  )
+
+  assert.equal(state.completed, true)
+  assert.equal(state.blocked, true)
+  assert.equal(state.exitCode, EXIT_BLOCKED)
+})
+
+test('v1 fallback: manual merge-resolution notification exits blocked', () => {
+  const client = new MockRpcClient()
+  const state: EventHandlerState = { completed: false, blocked: false, exitCode: -1, v2Enabled: false }
+
+  handleEvent(
+    { type: 'extension_ui_request', method: 'notify', id: 'n1', message: 'Survivor-branch finalization for M001 failed: merge conflict. Resolve manually and re-run /gsd auto.' },
     state,
     client,
   )
