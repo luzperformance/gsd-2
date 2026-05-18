@@ -1,12 +1,13 @@
 // Project/App: GSD-2
 // File Purpose: Shared recommended transcript rendering primitives for assistant, tool, command, footer, and auto-mode TUI surfaces.
 
-import { style, truncateToWidth, visibleWidth } from "@gsd/pi-tui";
+import { alignRight, padRight, style, truncateToWidth, visibleWidth } from "@gsd/pi-tui";
 import { theme, type ThemeBg, type ThemeColor } from "../theme/theme.js";
 import { formatTimestamp, type TimestampFormat } from "./timestamp.js";
-import { alignRight, roundedPanel } from "./tui-style-kit.js";
 
 export type StatusTone = "running" | "success" | "error" | "warning" | "muted";
+export type TuiTone = "default" | "accent" | "success" | "warning" | "error" | "muted";
+export type TuiBreakpoint = "compact" | "regular" | "wide";
 
 /** Conversation/system surfaces that the chat frame distinguishes by color. */
 export type FrameTone = "assistant" | "user" | "compaction" | "skill";
@@ -32,6 +33,61 @@ function toneColor(tone: StatusTone): ThemeColor {
 		case "muted":
 		default: return "toolMuted";
 	}
+}
+
+export function breakpoint(width: number): TuiBreakpoint {
+	if (width < 72) return "compact";
+	if (width < 112) return "regular";
+	return "wide";
+}
+
+function panelToneColor(tone: TuiTone): ThemeColor {
+	switch (tone) {
+		case "accent": return "borderAccent";
+		case "success": return "success";
+		case "warning": return "warning";
+		case "error": return "error";
+		case "muted": return "borderMuted";
+		case "default":
+		default: return "border";
+	}
+}
+
+export function badge(text: string, tone: TuiTone = "default"): string {
+	return theme.fg(panelToneColor(tone), text);
+}
+
+export function keyValue(label: string, value: string, valueColor: ThemeColor = "text", labelWidth = 10): string {
+	return `${theme.fg("dim", padRight(label, labelWidth))}${theme.fg(valueColor, value)}`;
+}
+
+export function roundedPanel(
+	lines: string[],
+	width: number,
+	opts: {
+		tone?: TuiTone;
+		title?: string;
+		rightTitle?: string;
+		paddingX?: number;
+	} = {},
+): string[] {
+	const outerWidth = Math.max(1, width);
+	const body = lines.length > 0 ? lines : [""];
+	if (outerWidth < 3) {
+		return body.map((line) => truncateToWidth(line, outerWidth, ""));
+	}
+
+	let panel = style()
+		.border("rounded")
+		.borderColor((text) => theme.fg(panelToneColor(opts.tone ?? "default"), text))
+		.paddingX(Math.max(0, opts.paddingX ?? 0));
+	if (opts.title) {
+		panel = panel.title(theme.fg("borderAccent", opts.title));
+	}
+	if (opts.rightTitle) {
+		panel = panel.titleRight(theme.fg("dim", opts.rightTitle));
+	}
+	return panel.render(body, outerWidth);
 }
 
 export function rightAlign(left: string, right: string, width: number): string {

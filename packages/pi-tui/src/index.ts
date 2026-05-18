@@ -95,4 +95,4 @@ export {
 	TUI,
 } from "./tui.js";
 // Utilities
-export { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./utils.js";
+export { alignRight, padRight, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./utils.js";
