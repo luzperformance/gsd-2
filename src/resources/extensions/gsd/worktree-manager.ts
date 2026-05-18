@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Creates, resolves, and reconciles GSD milestone worktrees.
+
 /**
  * GSD Worktree Manager
  *
@@ -172,8 +175,9 @@ export function isInsideWorktreesDir(basePath: string, targetPath: string): bool
  * Readers that cross the session/worktree boundary (validators, the bootstrap
  * audit, cross-session state queries) should route through this helper so they
  * don't silently read stale project-root state while live work sits in the
- * worktree. Writers and tools whose contract is "operate on the path I was
- * given" should NOT use this helper — they preserve the legacy behavior.
+ * worktree. Workflow artifact writers may also use it when their contract is
+ * to update the live milestone projection; generic path-local tools should
+ * preserve "operate on the path I was given" behavior.
  *
  * A stale worktree directory (no `.git` file) is treated as absent. The
  * createWorktree() path already cleans these up, but readers must not trust
