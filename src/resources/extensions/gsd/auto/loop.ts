@@ -876,6 +876,10 @@ export async function autoLoop(
             finishTurn("skipped");
             continue;
           }
+          if (preDispatchResult.action === "retry") {
+            finishTurn("retry", "execution", preDispatchResult.reason);
+            continue;
+          }
           const preData = preDispatchResult.data;
           const guardsResult = await runGuards(ic, preData.mid);
           phaseReporter.report("guard", guardsResult.action);
@@ -891,6 +895,10 @@ export async function autoLoop(
           }
           if (dispatchResult.action === "continue") {
             finishTurn("skipped");
+            continue;
+          }
+          if (dispatchResult.action === "retry") {
+            finishTurn("retry", "execution", dispatchResult.reason);
             continue;
           }
           iterData = dispatchResult.data;
