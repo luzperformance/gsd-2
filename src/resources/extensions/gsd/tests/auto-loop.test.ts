@@ -1663,6 +1663,7 @@ test("autoLoop dev path dispatches orchestration.advance results without legacy 
     blockers: [],
   } as any;
   let advanceCalls = 0;
+  const finalizedUnits: string[] = [];
   let s: any;
   s = makeLoopSession({
     currentMilestoneId: "M002",
@@ -1684,6 +1685,9 @@ test("autoLoop dev path dispatches orchestration.advance results without legacy 
           unit: { unitType: "execute-task", unitId: "M002/S03/T05" },
           stateSnapshot,
         };
+      },
+      completeActiveUnit: async (unit: { unitType: string; unitId: string }) => {
+        finalizedUnits.push(`${unit.unitType}:${unit.unitId}`);
       },
       resume: async () => ({ kind: "stopped" as const, reason: "unused" }),
       stop: async () => ({ kind: "stopped" as const, reason: "unused" }),
@@ -1719,6 +1723,7 @@ test("autoLoop dev path dispatches orchestration.advance results without legacy 
     "advance prompt",
     "runUnit should receive the dispatch prompt captured by advance()",
   );
+  assert.deepEqual(finalizedUnits, ["execute-task:M002/S03/T05"]);
   assert.equal(s.pendingOrchestrationDispatch, null, "pending dispatch should be one-shot");
 });
 
@@ -1753,6 +1758,7 @@ test("autoLoop consumes pending orchestration dispatch without advancing twice",
       advance: async () => {
         throw new Error("advance must not run when a pending dispatch already exists");
       },
+      completeActiveUnit: async () => {},
       resume: async () => ({ kind: "stopped" as const, reason: "unused" }),
       stop: async () => ({ kind: "stopped" as const, reason: "unused" }),
       getStatus: () => ({ phase: "running" as const, transitionCount: 1 }),

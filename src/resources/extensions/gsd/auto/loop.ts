@@ -1145,6 +1145,10 @@ export async function autoLoop(
         markCompleted: markDispatchCompleted,
         logWriteFailure: logDispatchLedgerWriteFailure,
       }) || dispatchSettled;
+      await s.orchestration?.completeActiveUnit({
+        unitType: iterData.unitType,
+        unitId: iterData.unitId,
+      });
       completeIteration();
       stuckStatePersistedThisIteration = true;
       finishTurn("completed");

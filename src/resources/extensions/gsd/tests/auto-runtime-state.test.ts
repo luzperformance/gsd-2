@@ -14,6 +14,7 @@ test("getAutoRuntimeSnapshot includes orchestration phase when available", () =>
   autoSession.orchestration = {
     async start() { return { kind: "stopped" as const, reason: "test" }; },
     async advance() { return { kind: "stopped" as const, reason: "test" }; },
+    async completeActiveUnit() {},
     async resume() { return { kind: "stopped" as const, reason: "test" }; },
     async stop() { return { kind: "stopped" as const, reason: "test" }; },
     getStatus() {

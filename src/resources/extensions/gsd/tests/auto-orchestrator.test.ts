@@ -510,6 +510,51 @@ test("advance() is idempotent for the same active unit", async () => {
   assert.equal(prepareCalls, 1);
 });
 
+test("completeActiveUnit clears in-flight idempotency and stops stale same-unit advance", async () => {
+  const { deps, calls } = makeDeps();
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const first = await orchestrator.advance();
+  assert.equal(first.kind, "advanced");
+  if (first.kind !== "advanced") throw new Error("expected first advance");
+
+  await orchestrator.completeActiveUnit(first.unit);
+  const second = await orchestrator.advance();
+
+  assert.equal(orchestrator.getStatus().activeUnit, undefined);
+  assert.equal(second.kind, "blocked");
+  if (second.kind !== "blocked") throw new Error("expected stale same-unit block");
+  assert.equal(second.action, "stop");
+  assert.equal(second.reason, "state did not advance after finalized execute-task T01");
+  assert.ok(calls.includes("journal:unit-finalized"));
+  const prepareCalls = calls.filter((c) => c === "worktree.prepare").length;
+  assert.equal(prepareCalls, 1, "stale same-unit advance must not prepare or redispatch");
+});
+
+test("completeActiveUnit allows a different next unit to advance", async () => {
+  let nextTaskId = "T01";
+  const { deps } = makeDeps({
+    dispatch: {
+      async decideNextUnit() {
+        return { unitType: "execute-task", unitId: nextTaskId, reason: "ready", preconditions: [] };
+      },
+    },
+  });
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const first = await orchestrator.advance();
+  assert.equal(first.kind, "advanced");
+  if (first.kind !== "advanced") throw new Error("expected first advance");
+
+  await orchestrator.completeActiveUnit(first.unit);
+  nextTaskId = "T02";
+  const second = await orchestrator.advance();
+
+  assert.equal(second.kind, "advanced");
+  if (second.kind !== "advanced") throw new Error("expected second advance");
+  assert.deepEqual(second.unit, { unitType: "execute-task", unitId: "T02" });
+});
+
 test("resume() re-enters running phase", async () => {
   const { deps } = makeDeps();
   const orchestrator = createAutoOrchestrator(deps);
