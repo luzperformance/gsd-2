@@ -15,7 +15,8 @@
 
 import type { ExtensionContext, ExtensionAPI } from "@gsd/pi-coding-agent";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { resolveSliceFile, resolveSlicePath, resolveMilestoneFile } from "./paths.js";
+import { gsdProjectionRoot, resolveSliceFile, resolveSlicePath, resolveMilestoneFile } from "./paths.js";
+import { resolveCanonicalMilestoneRoot } from "./worktree-manager.js";
 import { parseUnitId } from "./unit-id.js";
 import { isDbAvailable, getTask, getSliceTasks, getMilestoneSlices } from "./gsd-db.js";
 import type { TaskRow } from "./db-task-slice-rows.js";
@@ -191,7 +192,13 @@ async function runValidateMilestonePostCheck(
     return "retry";
   };
 
-  const validationFile = resolveMilestoneFile(s.basePath, mid, "VALIDATION");
+  const validationBasePath = resolveCanonicalMilestoneRoot(s.basePath, mid);
+  const validationFile = join(
+    gsdProjectionRoot(validationBasePath),
+    "milestones",
+    mid,
+    `${mid}-VALIDATION.md`,
+  );
   if (!validationFile) {
     return setToolFailureRetry(
       "You must call gsd_validate_milestone to persist the validation results. No VALIDATION.md was created.",
