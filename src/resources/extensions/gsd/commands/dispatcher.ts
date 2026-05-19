@@ -13,6 +13,7 @@ import {
   getValidationBlockMessageForBase,
   isValidationBlockAllowedCommand,
 } from "../validation-block-guard.js";
+import { clearFreshGsdRunSurfaces, isFreshGsdWorkCommand } from "../fresh-run-ui.js";
 
 function emitVisibleCommandBlock(
   ctx: ExtensionCommandContext,
@@ -48,6 +49,9 @@ export async function handleGSDCommand(
   let handled = false;
   try {
     handled = await withCommandCwd(ctx.cwd, async () => {
+      if (isFreshGsdWorkCommand(trimmed)) {
+        clearFreshGsdRunSurfaces(ctx);
+      }
       if (!isValidationBlockAllowedCommand(trimmed)) {
         const blockedMessage = await getValidationBlockMessageForBase(projectRoot(), trimmed);
         if (blockedMessage) {

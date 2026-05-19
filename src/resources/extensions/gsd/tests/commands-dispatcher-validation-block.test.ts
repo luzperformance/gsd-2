@@ -39,8 +39,15 @@ function cleanup(base: string): void {
   try { rmSync(base, { recursive: true, force: true }); } catch { /* swallow */ }
 }
 
-function makeMockCtx(base: string): { ctx: any; calls: NotifyCall[] } {
+function makeMockCtx(base: string): {
+  ctx: any;
+  calls: NotifyCall[];
+  widgets: Array<[string, unknown]>;
+  statuses: Array<[string, string | undefined]>;
+} {
   const calls: NotifyCall[] = [];
+  const widgets: Array<[string, unknown]> = [];
+  const statuses: Array<[string, string | undefined]> = [];
   return {
     ctx: {
       cwd: base,
@@ -48,9 +55,17 @@ function makeMockCtx(base: string): { ctx: any; calls: NotifyCall[] } {
         notify: (message: string, kind: string) => {
           calls.push({ message, kind });
         },
+        setWidget: (key: string, value: unknown) => {
+          widgets.push([key, value]);
+        },
+        setStatus: (key: string, value: string | undefined) => {
+          statuses.push([key, value]);
+        },
       },
     },
     calls,
+    widgets,
+    statuses,
   };
 }
 
@@ -91,7 +106,7 @@ test("dispatcher blocks bare /gsd while milestone validation needs attention", a
   const base = makeBase();
   try {
     seedValidationBlockedMilestone(base);
-    const { ctx, calls } = makeMockCtx(base);
+    const { ctx, calls, widgets, statuses } = makeMockCtx(base);
     const { pi, messages } = makeMockPi();
 
     await handleGSDCommand("", ctx, pi);
@@ -103,6 +118,9 @@ test("dispatcher blocks bare /gsd while milestone validation needs attention", a
     assert.match(messages[0].content, /\/gsd cannot run/);
     assert.match(messages[0].content, /\/gsd validate-milestone/);
     assert.match(messages[0].content, /\/gsd verdict pass --rationale/);
+    assert.ok(widgets.some(([key, value]) => key === "gsd-outcome" && value === undefined));
+    assert.ok(widgets.some(([key, value]) => key === "gsd-progress" && value === undefined));
+    assert.ok(statuses.some(([key, value]) => key === "gsd-step" && value === undefined));
   } finally {
     closeDatabase();
     invalidateStateCache();
