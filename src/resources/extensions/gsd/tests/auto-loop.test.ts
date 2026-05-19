@@ -3908,7 +3908,7 @@ test("autoLoop rejects execute-task with 0 tool calls as hallucinated (#1833)", 
   ctx.sessionManager = { getSessionFile: () => "/tmp/session.json" };
   const pi = makeMockPi();
 
-  let iterationCount = 0;
+  let closeoutCount = 0;
   const notifications: string[] = [];
   ctx.ui.notify = (msg: string) => { notifications.push(msg); };
 
@@ -3943,6 +3943,7 @@ test("autoLoop rejects execute-task with 0 tool calls as hallucinated (#1833)", 
       };
     },
     closeoutUnit: async () => {
+      closeoutCount++;
       // Simulate snapshotUnitMetrics adding a 0-toolCalls entry to ledger
       mockLedger.units.push({
         type: "execute-task",
@@ -3953,15 +3954,9 @@ test("autoLoop rejects execute-task with 0 tool calls as hallucinated (#1833)", 
         tokens: { input: 100, output: 200, total: 300, cacheRead: 0, cacheWrite: 0 },
         cost: 0.50,
       });
+      if (closeoutCount >= 2) s.active = false;
     },
     getLedger: () => mockLedger,
-    postUnitPostVerification: async () => {
-      deps.callLog.push("postUnitPostVerification");
-      iterationCount++;
-      // Deactivate after 2nd iteration
-      s.active = iterationCount < 2;
-      return "continue" as const;
-    },
   });
 
   const loopPromise = autoLoop(ctx, pi, s, deps);
@@ -3974,6 +3969,7 @@ test("autoLoop rejects execute-task with 0 tool calls as hallucinated (#1833)", 
   await new Promise((r) => setTimeout(r, 50));
   mockLedger.units.length = 0; // clear previous entry
   (deps as any).closeoutUnit = async () => {
+    closeoutCount++;
     mockLedger.units.push({
       type: "execute-task",
       id: "M001/S01/T01",
@@ -3983,6 +3979,7 @@ test("autoLoop rejects execute-task with 0 tool calls as hallucinated (#1833)", 
       tokens: { input: 500, output: 800, total: 1300, cacheRead: 0, cacheWrite: 0 },
       cost: 1.00,
     });
+    if (closeoutCount >= 2) s.active = false;
   };
   resolveAgentEnd(makeEvent());
 
@@ -4003,6 +4000,11 @@ test("autoLoop rejects execute-task with 0 tool calls as hallucinated (#1833)", 
   assert.ok(
     deriveCount >= 2,
     `deriveState should be called at least 2 times for retry (got ${deriveCount})`,
+  );
+  assert.equal(
+    deps.callLog.filter((c) => c === "postUnitPreVerification").length,
+    1,
+    "zero-tool retry should bypass finalize on the failed iteration",
   );
 });
 
@@ -4095,7 +4097,7 @@ test("autoLoop rejects complete-slice with 0 tool calls as context-exhausted (#2
   ctx.sessionManager = { getSessionFile: () => "/tmp/session.json" };
   const pi = makeMockPi();
 
-  let iterationCount = 0;
+  let closeoutCount = 0;
   const notifications: string[] = [];
   ctx.ui.notify = (msg: string) => { notifications.push(msg); };
 
@@ -4129,6 +4131,7 @@ test("autoLoop rejects complete-slice with 0 tool calls as context-exhausted (#2
       };
     },
     closeoutUnit: async () => {
+      closeoutCount++;
       // complete-slice with 0 tool calls — context exhausted, no progress
       mockLedger.units.push({
         type: "complete-slice",
@@ -4139,15 +4142,9 @@ test("autoLoop rejects complete-slice with 0 tool calls as context-exhausted (#2
         tokens: { input: 50, output: 100, total: 150, cacheRead: 0, cacheWrite: 0 },
         cost: 0.10,
       });
+      if (closeoutCount >= 2) s.active = false;
     },
     getLedger: () => mockLedger,
-    postUnitPostVerification: async () => {
-      deps.callLog.push("postUnitPostVerification");
-      iterationCount++;
-      // Deactivate after 2nd iteration
-      s.active = iterationCount < 2;
-      return "continue" as const;
-    },
   });
 
   const loopPromise = autoLoop(ctx, pi, s, deps);
@@ -4160,6 +4157,7 @@ test("autoLoop rejects complete-slice with 0 tool calls as context-exhausted (#2
   await new Promise((r) => setTimeout(r, 50));
   mockLedger.units.length = 0;
   (deps as any).closeoutUnit = async () => {
+    closeoutCount++;
     mockLedger.units.push({
       type: "complete-slice",
       id: "M001/S01",
@@ -4169,6 +4167,7 @@ test("autoLoop rejects complete-slice with 0 tool calls as context-exhausted (#2
       tokens: { input: 200, output: 400, total: 600, cacheRead: 0, cacheWrite: 0 },
       cost: 0.30,
     });
+    if (closeoutCount >= 2) s.active = false;
   };
   resolveAgentEnd(makeEvent());
 
@@ -4188,6 +4187,11 @@ test("autoLoop rejects complete-slice with 0 tool calls as context-exhausted (#2
   assert.ok(
     deriveCount >= 2,
     `deriveState should be called at least 2 times for retry (got ${deriveCount})`,
+  );
+  assert.equal(
+    deps.callLog.filter((c) => c === "postUnitPreVerification").length,
+    1,
+    "zero-tool retry should bypass finalize on the failed iteration",
   );
 });
 
