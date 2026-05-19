@@ -48,6 +48,7 @@ import { getIsolationMode, loadEffectiveGSDPreferences } from "./preferences.js"
 import { resolveUokFlags } from "./uok/flags.js";
 import { ensurePlanV2Graph, isMissingFinalizedContextResult } from "./uok/plan-v2.js";
 import { detectProjectState, hasGsdBootstrapArtifacts } from "./detection.js";
+import { isFutureMilestoneStatus } from "./status-guards.js";
 import { showProjectInit, offerMigration } from "./init-wizard.js";
 import { validateDirectory } from "./validate-directory.js";
 import { showConfirm } from "../shared/tui.js";
@@ -1042,6 +1043,7 @@ async function dispatchWorkflow(
             ? ctx.modelRegistry.getProviderAuthMode(ctx.model.provider)
             : undefined,
         baseUrl: result.appliedModel?.baseUrl ?? ctx.model?.baseUrl,
+        activeTools: typeof pi.getActiveTools === "function" ? pi.getActiveTools() : [],
       },
     );
     if (compatibilityError) {
@@ -1471,7 +1473,7 @@ export async function showDiscuss(
   // No active milestone (or corrupted milestone with undefined id) —
   // check for pending milestones to discuss instead
   if (!state.activeMilestone?.id) {
-    const pendingMilestones = state.registry.filter(m => m.status === "pending");
+    const pendingMilestones = state.registry.filter(m => isFutureMilestoneStatus(m.status));
     if (pendingMilestones.length === 0) {
       ctx.ui.notify("No active milestone. Run /gsd to create one first.", "warning");
       return;
@@ -1583,7 +1585,7 @@ export async function showDiscuss(
 
   if (pendingSlices.length === 0) {
     // All slices complete — but queued milestones may still need discussion (#3150)
-    const pendingMilestones = state.registry.filter(m => m.status === "pending");
+    const pendingMilestones = state.registry.filter(m => isFutureMilestoneStatus(m.status));
     if (pendingMilestones.length > 0) {
       await showDiscussQueuedMilestone(ctx, pi, basePath, pendingMilestones);
       return;
@@ -1607,7 +1609,7 @@ export async function showDiscuss(
     // If all pending slices are discussed, check for queued milestones before exiting (#3150)
     const allDiscussed = pendingSlices.every(s => discussedMap.get(s.id));
     if (allDiscussed) {
-      const pendingMilestones = state.registry.filter(m => m.status === "pending");
+      const pendingMilestones = state.registry.filter(m => isFutureMilestoneStatus(m.status));
       if (pendingMilestones.length > 0) {
         await showDiscussQueuedMilestone(ctx, pi, basePath, pendingMilestones);
         return;
@@ -1643,7 +1645,7 @@ export async function showDiscuss(
     });
 
     // Offer access to queued milestones when any exist
-    const pendingMilestones = state.registry.filter(m => m.status === "pending");
+    const pendingMilestones = state.registry.filter(m => isFutureMilestoneStatus(m.status));
     if (pendingMilestones.length > 0) {
       actions.push({
         id: "discuss_queued_milestone",
@@ -1718,10 +1720,11 @@ async function showDiscussQueuedMilestone(
     const hasContext = !!resolveMilestoneFile(basePath, m.id, "CONTEXT");
     const hasDraft = !hasContext && !!resolveMilestoneFile(basePath, m.id, "CONTEXT-DRAFT");
     const contextStatus = hasContext ? "context ✓" : hasDraft ? "draft context" : "no context yet";
+    const statusLabel = m.status === "planned" ? "planned" : "queued";
     return {
       id: m.id,
       label: `${m.id}: ${m.title}`,
-      description: `[queued] · ${contextStatus}`,
+      description: `[${statusLabel}] · ${contextStatus}`,
       recommended: i === 0,
     };
   });
@@ -2163,7 +2166,14 @@ export async function showSmartEntry(
       const ageMs = Date.now() - (entry.createdAt || 0);
       const manifestExists = existsSync(join(gsdRoot(basePath), "DISCUSSION-MANIFEST.json"));
       const milestoneHasContext = !!resolveMilestoneFile(basePath, entry.milestoneId, "CONTEXT");
-      if (!manifestExists && !milestoneHasContext && ageMs > 30_000) {
+      const milestoneHasRoadmap = !!resolveMilestoneFile(basePath, entry.milestoneId, "ROADMAP");
+      const milestoneRow = isDbAvailable() ? getMilestone(entry.milestoneId) : null;
+      const discussPlanComplete = milestoneHasRoadmap && !!milestoneRow && milestoneRow.status !== "queued";
+      if (discussPlanComplete) {
+        // The discuss flow already completed, but pending auto-start cleanup handshake did not run.
+        // Clear stale in-memory guard and continue through normal active-milestone routing.
+        deletePendingAutoStart(basePath);
+      } else if (!manifestExists && !milestoneHasContext && ageMs > 30_000) {
         // Stale entry from an interrupted discussion — clear and continue
         deletePendingAutoStart(basePath);
       } else {

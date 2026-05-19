@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Mutable auto-mode session state container.
 /**
  * AutoSession — encapsulates all mutable auto-mode state into a single instance.
  *
@@ -52,6 +54,16 @@ export interface PendingVerificationRetry {
   attempt: number;
 }
 
+export interface PendingOrchestrationDispatch {
+  unitType: string;
+  unitId: string;
+  prompt: string;
+  pauseAfterUatDispatch: boolean;
+  state: import("../types.js").GSDState;
+  mid: string | undefined;
+  midTitle: string | undefined;
+}
+
 /**
  * A typed item enqueued by postUnitPostVerification for the main loop to
  * drain via the standard runUnit path. Replaces inline dispatch
@@ -89,6 +101,7 @@ export class AutoSession {
   active = false;
   paused = false;
   completionStopInProgress = false;
+  preserveStepSurfaceAfterLoopExit = false;
   stepMode = false;
   verbose = false;
   activeEngineId: string | null = null;
@@ -241,6 +254,7 @@ export class AutoSession {
 
   // ── Orchestration seam ───────────────────────────────────────────────────
   orchestration: AutoOrchestrationModule | null = null;
+  pendingOrchestrationDispatch: PendingOrchestrationDispatch | null = null;
 
   // ── Loop promise state ──────────────────────────────────────────────────
   // Per-unit resolve function and session-switch guard live at module level
@@ -289,6 +303,7 @@ export class AutoSession {
     this.active = false;
     this.paused = false;
     this.completionStopInProgress = false;
+    this.preserveStepSurfaceAfterLoopExit = false;
     this.stepMode = false;
     this.verbose = false;
     this.activeEngineId = null;
@@ -372,6 +387,7 @@ export class AutoSession {
 
     // Orchestration seam
     this.orchestration = null;
+    this.pendingOrchestrationDispatch = null;
 
     // Loop promise state lives in auto-loop.ts module scope
   }

@@ -45,7 +45,8 @@ const PACKAGE_SCRIPT_KEYS = ["typecheck", "lint", "test"] as const;
  *   2. Task plan verify field (split on &&)
  *   3. package.json scripts (typecheck, lint, test)
  *   4. Python pytest project markers
- *   5. None found
+ *   5. Dependency-free Node test files
+ *   6. None found
  */
 export function discoverCommands(options: DiscoverCommandsOptions): DiscoveredCommands {
   // 1. Preference commands
@@ -97,8 +98,30 @@ export function discoverCommands(options: DiscoverCommandsOptions): DiscoveredCo
     return { commands: [pythonCommand], source: "python-project" };
   }
 
-  // 5. Nothing found
+  const nodeTestCommand = discoverNodeTestFileCommand(options.cwd);
+  if (nodeTestCommand) {
+    return { commands: [nodeTestCommand], source: "node-test-file" };
+  }
+
+  // 6. Nothing found
   return { commands: [], source: "none" };
+}
+
+function discoverNodeTestFileCommand(cwd: string): string | null {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(cwd, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  const testFile = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .filter((name) => /^test-[A-Za-z0-9._-]+\.js$|^[A-Za-z0-9._-]+\.test\.js$/.test(name))
+    .sort()[0];
+
+  return testFile ? `node ${testFile}` : null;
 }
 
 function discoverPythonPytestCommand(cwd: string): string | null {
@@ -301,6 +324,30 @@ export interface RunVerificationGateOptions {
   commandTimeoutMs?: number;
 }
 
+export interface VerificationTarget {
+  id: string;
+  cwd: string;
+  preferenceCommands?: string[];
+}
+
+function mergeDiscoverySource(
+  sources: VerificationResult["discoverySource"][],
+): VerificationResult["discoverySource"] {
+  if (sources.length === 0) return "none";
+  const first = sources[0];
+  if (sources.every((source) => source === first)) return first;
+  const precedence: VerificationResult["discoverySource"][] = [
+    "preference",
+    "task-plan",
+    "package-json",
+    "python-project",
+  ];
+  for (const source of precedence) {
+    if (sources.includes(source)) return source;
+  }
+  return "none";
+}
+
 /**
  * Run the verification gate: discover commands, execute each via spawnSync,
  * and return a structured result.
@@ -373,6 +420,51 @@ export function runVerificationGate(options: RunVerificationGateOptions): Verifi
     passed: checks.every(c => c.exitCode === 0),
     checks,
     discoverySource: source,
+    timestamp,
+  };
+}
+
+export function runVerificationGateForTargets(options: {
+  targets: VerificationTarget[];
+  preferenceCommands?: string[];
+  taskPlanVerify?: string;
+  commandTimeoutMs?: number;
+}): VerificationResult {
+  const timestamp = Date.now();
+  if (options.targets.length === 0) {
+    return {
+      passed: true,
+      checks: [],
+      discoverySource: "none",
+      timestamp,
+    };
+  }
+
+  const checks: VerificationCheck[] = [];
+  const sources: VerificationResult["discoverySource"][] = [];
+  let passed = true;
+
+  for (const target of options.targets) {
+    const result = runVerificationGate({
+      cwd: target.cwd,
+      preferenceCommands: options.preferenceCommands ?? target.preferenceCommands,
+      taskPlanVerify: options.taskPlanVerify,
+      commandTimeoutMs: options.commandTimeoutMs,
+    });
+    passed = passed && result.passed;
+    sources.push(result.discoverySource);
+    for (const check of result.checks) {
+      checks.push({
+        ...check,
+        command: target.id === "project" ? check.command : `[${target.id}] ${check.command}`,
+      });
+    }
+  }
+
+  return {
+    passed,
+    checks,
+    discoverySource: mergeDiscoverySource(sources),
     timestamp,
   };
 }
