@@ -273,13 +273,14 @@ export function formatWidgetTokens(count: number): string {
 export function formatRuntimeHealthSignal(
   record: AutoUnitRuntimeRecord | null,
   now = Date.now(),
-): { level: "green" | "yellow"; summary: string; detail?: string } | null {
+): { level: "green" | "yellow"; state: "recovering" | "waiting"; summary: string; detail?: string } | null {
   if (!record) return null;
   const idleMs = Math.max(0, now - record.lastProgressAt);
   const idleMinutes = Math.floor(idleMs / 60_000);
   if ((record.recoveryAttempts ?? 0) > 0 || record.phase === "recovered" || record.lastProgressKind.includes("recovery")) {
     return {
       level: "yellow",
+      state: "recovering",
       summary: "Recovering",
       detail: `retry ${record.recoveryAttempts ?? 1} after ${record.lastRecoveryReason ?? "idle"} stall`,
     };
@@ -287,8 +288,9 @@ export function formatRuntimeHealthSignal(
   if (record.progressCount === 0 && idleMs >= 60_000) {
     return {
       level: "yellow",
-      summary: "Waiting on provider",
-      detail: `no output for ${idleMinutes}m`,
+      state: "waiting",
+      summary: `provider idle ${idleMinutes}m`,
+      detail: `last output ${idleMinutes}m ago`,
     };
   }
   return null;
@@ -763,18 +765,21 @@ export function updateProgressWidget(
         const healthIcon = healthLevel === "green" ? GLYPH.statusActive
           : healthLevel === "yellow" ? "!"
             : "x";
-        const providerWaitStr = theme.fg("warning", "waiting on provider");
-        const healthStr = healthLevel === "green"
-          ? `  ${providerWaitStr}`
-          : `  ${providerWaitStr} ${theme.fg("dim", "·")} ${theme.fg(healthColor, healthIcon)} ${theme.fg(healthColor, healthSummary)}`;
+        const activeState = runtimeSignal?.state === "waiting" ? "waiting" : "running";
+        const stateColor = runtimeSignal?.state === "waiting" ? "warning" : "success";
+        const healthParts: string[] = [];
+        if (runtimeSignal?.summary) {
+          healthParts.push(theme.fg(healthColor, healthSummary));
+        } else if (healthLevel !== "green") {
+          healthParts.push(`${theme.fg(healthColor, healthIcon)} ${theme.fg(healthColor, healthSummary)}`);
+        }
 
-        const unitState = `${unitVerb(unitType)} ${unitId}`;
         const headerLeft = [
           `${pad}${spinner} ${theme.fg("accent", theme.bold("GSD"))}`,
           theme.fg("success", modeTag),
-          theme.fg("success", "running"),
-          theme.fg("text", unitState),
-        ].join(` ${theme.fg("dim", "·")} `) + healthStr;
+          theme.fg(stateColor, activeState),
+          ...healthParts,
+        ].join(` ${theme.fg("dim", "·")} `);
 
         // ETA in header right, after elapsed
         const eta = estimateTimeRemaining();

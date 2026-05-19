@@ -217,8 +217,34 @@ test("formatRuntimeHealthSignal surfaces idle recovery instead of generic progre
 
   assert.deepEqual(signal, {
     level: "yellow",
+    state: "recovering",
     summary: "Recovering",
     detail: "retry 1 after idle stall",
+  });
+});
+
+test("formatRuntimeHealthSignal describes provider idle without repeating waiting text", () => {
+  const signal = formatRuntimeHealthSignal({
+    version: 1,
+    unitType: "run-uat",
+    unitId: "M007/S01",
+    startedAt: 1_000,
+    updatedAt: 120_000,
+    phase: "dispatched",
+    wrapupWarningSent: false,
+    continueHereFired: false,
+    timeoutAt: null,
+    lastProgressAt: 1_000,
+    progressCount: 0,
+    lastProgressKind: "start",
+    recoveryAttempts: 0,
+  }, 121_000);
+
+  assert.deepEqual(signal, {
+    level: "yellow",
+    state: "waiting",
+    summary: "provider idle 2m",
+    detail: "last output 2m ago",
   });
 });
 
@@ -543,7 +569,8 @@ test("updateProgressWidget full mode keeps footer-owned signals out of auto deck
   assert.ok(installedWidget, "progress widget should be installed");
   const rendered = installedWidget.render(120).join("\n");
 
-  assert.match(rendered, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+GSD\s+·\s+AUTO\s+·\s+running\s+·\s+executing M004\/S01\/T01/);
+  assert.match(rendered, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+GSD\s+·\s+AUTO\s+·\s+running/);
+  assert.doesNotMatch(rendered.split("\n")[1] ?? "", /M004\/S01\/T01/);
   assert.match(rendered, /Budget Tracking/);
   assert.match(rendered, /T01: Add repeat column via idempotent ALTER TABLE/);
   assert.match(rendered, /dashboard/);
@@ -610,10 +637,12 @@ test("updateProgressWidget shows provider-waiting state consistently for auto an
   const autoRendered = renderDashboard(false);
   const nextRendered = renderDashboard(true);
 
-  assert.match(autoRendered, /GSD\s+·\s+AUTO\s+·\s+running\s+·\s+completing M003\/S01/);
-  assert.match(nextRendered, /GSD\s+·\s+NEXT\s+·\s+running\s+·\s+completing M003\/S01/);
-  assert.match(autoRendered, /waiting on provider/);
-  assert.match(nextRendered, /waiting on provider/);
+  assert.match(autoRendered, /GSD\s+·\s+AUTO\s+·\s+running/);
+  assert.match(nextRendered, /GSD\s+·\s+NEXT\s+·\s+running/);
+  assert.doesNotMatch(autoRendered.split("\n")[1] ?? "", /completing M003\/S01/);
+  assert.doesNotMatch(nextRendered.split("\n")[1] ?? "", /completing M003\/S01/);
+  assert.doesNotMatch(autoRendered, /waiting on provider.*Waiting on provider/i);
+  assert.doesNotMatch(nextRendered, /waiting on provider.*Waiting on provider/i);
   assert.match(autoRendered, /completing\s+M003\/S01/);
   assert.match(nextRendered, /completing\s+M003\/S01/);
   assert.doesNotMatch(autoRendered, /Working/);

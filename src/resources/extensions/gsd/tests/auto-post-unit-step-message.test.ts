@@ -40,7 +40,7 @@ test("buildStepCompleteMessage: mid-flight step includes next unit label and /gs
   });
   const msg = buildStepCompleteMessage(state);
   assert.match(msg, /Next: Execute T03: Wire notify/);
-  assert.match(msg, /\/clear/);
+  assert.doesNotMatch(msg, /\/clear/);
   assert.match(msg, /\/gsd next to continue one step/);
 });
 
@@ -49,11 +49,11 @@ test("buildStepCompleteMessage: unknown phase falls back to generic continue lab
   const state = makeState({ phase: "totally-unknown" as unknown as GSDState["phase"] });
   const msg = buildStepCompleteMessage(state);
   assert.match(msg, /Next: Continue/);
-  assert.match(msg, /\/clear/);
+  assert.doesNotMatch(msg, /\/clear/);
 });
 
-test("STEP_COMPLETE_FALLBACK_MESSAGE: used when deriveState throws, still points users at /clear + /gsd next", () => {
-  assert.match(STEP_COMPLETE_FALLBACK_MESSAGE, /\/clear/);
+test("STEP_COMPLETE_FALLBACK_MESSAGE: used when deriveState throws, points users at /gsd next without /clear", () => {
+  assert.doesNotMatch(STEP_COMPLETE_FALLBACK_MESSAGE, /\/clear/);
   assert.match(STEP_COMPLETE_FALLBACK_MESSAGE, /\/gsd next/);
 });
 

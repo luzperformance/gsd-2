@@ -482,7 +482,7 @@ export function detectRogueFileWrites(
 export const MAX_ARTIFACT_VERIFICATION_RETRIES = 3;
 
 export const STEP_COMPLETE_FALLBACK_MESSAGE =
-  "Step complete. Run /clear if you want a clean view, then /gsd next to continue one step (or /gsd auto to run continuously).";
+  "Step complete. Run /gsd next to continue one step, or /gsd auto to run continuously.";
 
 export function buildStepCompleteMessage(nextState: import("./types.js").GSDState): string {
   if (nextState.phase === "complete") {
@@ -490,7 +490,7 @@ export function buildStepCompleteMessage(nextState: import("./types.js").GSDStat
   }
   const next = describeNextUnit(nextState);
   return `Step complete. Next: ${next.label}\n`
-    + `Run /clear if you want a clean view, then /gsd next to continue one step (or /gsd auto to run continuously).`;
+    + `Run /gsd next to continue one step, or /gsd auto to run continuously.`;
 }
 
 /**
