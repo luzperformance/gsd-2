@@ -135,7 +135,7 @@ export function formatUnmergedMilestoneBlockMessage(
     blocker.dirtyOverlap.length > 0
       ? "  1. Commit, stash, or discard the overlapping project-root files."
       : "  1. Review the unmerged milestone branch.",
-    `  2. Merge or explicitly recover ${blocker.branch} into ${blocker.integrationBranch}.`,
+    `  2. Run /gsd dispatch complete-milestone ${blocker.milestoneId} to complete the preserved milestone merge.`,
     `  3. After ${blocker.milestoneId} is merged, run /gsd again.`,
   ].join("\n");
 }

@@ -92,6 +92,7 @@ test("formatUnmergedMilestoneBlockMessage includes files, branch, and dirty over
     assert.match(message, /index\.html/);
     assert.match(message, /Project-root dirty files overlap/);
     assert.match(message, /Commit, stash, or discard/);
+    assert.match(message, /\/gsd dispatch complete-milestone M010/);
   } finally {
     closeDatabase();
     cleanup(base);
@@ -105,5 +106,7 @@ test("isUnmergedMilestoneAllowedCommand permits inspection and explicit recovery
   assert.equal(isUnmergedMilestoneAllowedCommand("status"), true);
   assert.equal(isUnmergedMilestoneAllowedCommand("worktree list"), true);
   assert.equal(isUnmergedMilestoneAllowedCommand("dispatch complete"), true);
+  assert.equal(isUnmergedMilestoneAllowedCommand("dispatch complete M008"), true);
   assert.equal(isUnmergedMilestoneAllowedCommand("dispatch complete-milestone"), true);
+  assert.equal(isUnmergedMilestoneAllowedCommand("dispatch complete-milestone M008"), true);
 });
