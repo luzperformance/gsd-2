@@ -213,6 +213,7 @@ import { countPendingCaptures } from "./captures.js";
 import { CMUX_CHANNELS, type CmuxLogLevel } from "../shared/cmux-events.js";
 import { ensureDbOpen } from "./bootstrap/dynamic-tools.js";
 import { getValidationBlockMessageForBase } from "./validation-block-guard.js";
+import { getUnmergedMilestoneBlockMessageForBase } from "./unmerged-milestone-guard.js";
 
 function makeCmuxEmitters(pi: ExtensionAPI) {
   return {
@@ -2492,6 +2493,13 @@ export async function startAuto(
   // bootstrap-only path; this call ensures the resume path is also protected.
   if (recoverFailedMigration(base)) {
     ctx.ui.notify("Recovered unfinished migration (.gsd.migrating → .gsd).", "info");
+  }
+
+  const unmergedStartMessage = await getUnmergedMilestoneBlockMessageForBase(base, "auto");
+  if (unmergedStartMessage) {
+    ctx.ui.notify(unmergedStartMessage, "warning");
+    debugLog("startAuto", { phase: "unmerged-milestone-blocked", base });
+    return;
   }
 
   const blockedStartMessage = await getValidationBlockMessageForBase(base, "auto");

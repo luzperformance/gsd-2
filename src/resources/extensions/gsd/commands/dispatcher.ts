@@ -13,6 +13,10 @@ import {
   getValidationBlockMessageForBase,
   isValidationBlockAllowedCommand,
 } from "../validation-block-guard.js";
+import {
+  getUnmergedMilestoneBlockMessageForBase,
+  isUnmergedMilestoneAllowedCommand,
+} from "../unmerged-milestone-guard.js";
 import { clearFreshGsdRunSurfaces, isFreshGsdWorkCommand } from "../fresh-run-ui.js";
 
 function emitVisibleCommandBlock(
@@ -52,8 +56,16 @@ export async function handleGSDCommand(
       if (isFreshGsdWorkCommand(trimmed)) {
         clearFreshGsdRunSurfaces(ctx);
       }
+      const base = projectRoot();
+      if (!isUnmergedMilestoneAllowedCommand(trimmed)) {
+        const blockedMessage = await getUnmergedMilestoneBlockMessageForBase(base, trimmed);
+        if (blockedMessage) {
+          emitVisibleCommandBlock(ctx, pi, blockedMessage);
+          return true;
+        }
+      }
       if (!isValidationBlockAllowedCommand(trimmed)) {
-        const blockedMessage = await getValidationBlockMessageForBase(projectRoot(), trimmed);
+        const blockedMessage = await getValidationBlockMessageForBase(base, trimmed);
         if (blockedMessage) {
           emitVisibleCommandBlock(ctx, pi, blockedMessage);
           return true;
