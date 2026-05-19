@@ -585,6 +585,7 @@ export const DISPATCH_RULES: DispatchRule[] = [
           midTitle,
           basePath,
           structuredQuestionsAvailable,
+          { headless: !!process.env.GSD_HEADLESS },
         ),
       };
     },
@@ -729,6 +730,7 @@ export const DISPATCH_RULES: DispatchRule[] = [
           midTitle,
           basePath,
           structuredQuestionsAvailable,
+          { headless: !!process.env.GSD_HEADLESS },
         ),
       };
     },
@@ -896,6 +898,7 @@ export const DISPATCH_RULES: DispatchRule[] = [
           midTitle,
           basePath,
           structuredQuestionsAvailable,
+          { headless: !!process.env.GSD_HEADLESS },
         ),
       };
     },
