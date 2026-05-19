@@ -67,7 +67,7 @@ import { crossReferenceEvidence, type ClaimedEvidence } from "./safety/evidence-
 import { validateContent } from "./safety/content-validator.js";
 import { resolveSafetyHarnessConfig } from "./safety/safety-harness.js";
 import { resolveExpectedArtifactPath as resolveArtifactForContent } from "./auto-artifact-paths.js";
-import { getIsolationMode, loadEffectiveGSDPreferences } from "./preferences.js";
+import { getIsolationMode, loadEffectiveGSDPreferences, type GSDPreferences } from "./preferences.js";
 import { getSliceTasks } from "./gsd-db.js";
 import { runPreExecutionChecks, type PreExecutionResult } from "./pre-execution-checks.js";
 import { writePreExecutionEvidence, type PreExecutionCheckJSON } from "./verification-evidence.js";
@@ -133,6 +133,44 @@ function getCurrentUnitCostStats(unitId: string): { unitCostUsd: number; rolling
     unitCostUsd,
     rollingAvgUsd: totalUnits > 0 ? totalCost / totalUnits : 0,
   };
+}
+
+async function hasArtifactCostGuardAdvancedPastUnit(
+  s: AutoSession,
+  ctx: ExtensionContext,
+  unitType: string,
+  unitId: string,
+  prefs: GSDPreferences | undefined,
+): Promise<boolean> {
+  try {
+    const state = await deriveState(s.canonicalProjectRoot);
+    const activeMilestone = state.activeMilestone;
+    if (!activeMilestone) return false;
+
+    const { resolveDispatch } = await import("./auto-dispatch.js");
+    const contextUsage = (ctx as any).sessionManager?.getContextUsage?.();
+    const action = await resolveDispatch({
+      basePath: s.basePath,
+      mid: activeMilestone.id,
+      midTitle: activeMilestone.title,
+      state,
+      prefs,
+      session: s,
+      sessionContextWindow: contextUsage?.contextWindow ?? (ctx as any).model?.contextWindow,
+      sessionProvider: (ctx as any).model?.provider,
+      modelRegistry: (ctx as any).modelRegistry,
+    });
+
+    return action.action !== "dispatch" || action.unitType !== unitType || action.unitId !== unitId;
+  } catch (err) {
+    debugLog("postUnit", {
+      phase: "artifact-cost-guard-advance-check-failed",
+      unitType,
+      unitId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
 }
 
 function persistGitActionFailure(basePath: string, action: TurnGitActionMode, message: string): string {
@@ -1287,7 +1325,7 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
         const hasExpectedArtifact = resolveExpectedArtifactPath(s.currentUnit.type, s.currentUnit.id, s.basePath) !== null;
         if (hasExpectedArtifact) {
           const retryKey = `${s.currentUnit.type}:${s.currentUnit.id}`;
-          const prefs = loadEffectiveGSDPreferences()?.preferences;
+          const prefs = loadEffectiveGSDPreferences(s.canonicalProjectRoot)?.preferences;
           const perUnitCapUsd =
             typeof prefs?.per_unit_cost_cap_usd === "number" && Number.isFinite(prefs.per_unit_cost_cap_usd) && prefs.per_unit_cost_cap_usd > 0
               ? prefs.per_unit_cost_cap_usd
@@ -1308,6 +1346,27 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
             s.pendingVerificationRetry = null;
             s.verificationRetryCount.delete(retryKey);
             s.verificationRetryFailureHashes.delete(retryKey);
+            const advancedPastUnit = await hasArtifactCostGuardAdvancedPastUnit(
+              s,
+              ctx,
+              s.currentUnit.type,
+              s.currentUnit.id,
+              prefs,
+            );
+            if (advancedPastUnit) {
+              debugLog("postUnit", {
+                phase: "artifact-cost-spike-continue-after-advance",
+                unitType: s.currentUnit.type,
+                unitId: s.currentUnit.id,
+                unitCostUsd,
+                rollingAvgUsd,
+              });
+              ctx.ui.notify(
+                `Unit ${s.currentUnit.id} cost spike detected (${unitCostUsd.toFixed(2)} vs avg ${rollingAvgUsd.toFixed(2)}) after state advanced; continuing closeout.`,
+                "warning",
+              );
+              return "continue";
+            }
             ctx.ui.notify(
               `Unit ${s.currentUnit.id} cost spike detected (${unitCostUsd.toFixed(2)} vs avg ${rollingAvgUsd.toFixed(2)}) — pausing auto-mode.`,
               "error",
