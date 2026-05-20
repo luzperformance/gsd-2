@@ -47,7 +47,7 @@ import { regenerateIfMissing } from "./workflow-projections.js";
 import { WorktreeStateProjection } from "./worktree-state-projection.js";
 import { createWorkspace, scopeMilestone } from "./workspace.js";
 import { normalizeWorktreePathForCompare } from "./worktree-root.js";
-import { isDbAvailable, getDbPath, refreshOpenDatabaseFromDisk, getTask, getSlice, getMilestone, updateTaskStatus, _getAdapter, getVerificationEvidence } from "./gsd-db.js";
+import { isDbAvailable, getDbPath, refreshOpenDatabaseFromDisk, getTask, getSlice, getMilestone, getMilestoneSlices, updateTaskStatus, _getAdapter, getVerificationEvidence } from "./gsd-db.js";
 import { renderPlanCheckboxes } from "./markdown-renderer.js";
 import { consumeSignal } from "./session-status-io.js";
 import {
@@ -101,6 +101,78 @@ const MAX_VERIFICATION_RETRIES = 3;
 /** Keep failure toasts short while still showing concrete examples. */
 const MAX_NOTIFICATION_DETAILS = 3;
 const NOTIFICATION_BULLET = "•";
+
+function agentEndMessagesIncludeToolCall(messages: unknown[] | undefined, toolName: string): boolean {
+  if (!Array.isArray(messages)) return false;
+  for (const message of messages) {
+    if (!message || typeof message !== "object") continue;
+    const content = (message as { content?: unknown }).content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      if (!part || typeof part !== "object") continue;
+      const typed = part as { type?: unknown; name?: unknown };
+      if (typed.type === "toolCall" && typed.name === toolName) return true;
+    }
+  }
+  return false;
+}
+
+function agentEndMessagesIncludeSuccessfulToolResult(messages: unknown[] | undefined, toolName: string): boolean {
+  if (!Array.isArray(messages)) return false;
+  for (const message of messages) {
+    if (!message || typeof message !== "object") continue;
+    const typed = message as { role?: unknown; toolName?: unknown; isError?: unknown };
+    if (typed.role === "toolResult" && typed.toolName === toolName && typed.isError !== true) return true;
+  }
+  return false;
+}
+
+function agentEndMessagesMentionTool(messages: unknown[] | undefined, toolName: string): boolean {
+  if (!Array.isArray(messages)) return false;
+  try {
+    return JSON.stringify(messages).includes(toolName);
+  } catch {
+    return false;
+  }
+}
+
+function hasIncompleteMilestoneSlice(milestoneId: string): boolean {
+  if (!isDbAvailable()) return false;
+  return getMilestoneSlices(milestoneId).some((slice) => !isClosedStatus(slice.status));
+}
+
+function hasRoadmapReassessmentArtifact(basePath: string, milestoneId: string): boolean {
+  const slicesDir = join(basePath, ".gsd", "milestones", milestoneId, "slices");
+  if (!existsSync(slicesDir)) return false;
+
+  try {
+    for (const entry of readdirSync(slicesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (existsSync(join(slicesDir, entry.name, `${entry.name}-ASSESSMENT.md`))) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function unitActivityMentionsTool(basePath: string, unitType: string, unitId: string, toolName: string): boolean {
+  const safeUnitId = unitId.replace(/\//g, "-");
+  const activityDir = join(basePath, ".gsd", "activity");
+  if (!existsSync(activityDir)) return false;
+
+  try {
+    for (const entry of readdirSync(activityDir, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.endsWith(`${unitType}-${safeUnitId}.jsonl`)) continue;
+      const content = readFileSync(join(activityDir, entry.name), "utf-8");
+      if (content.includes(toolName)) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
 
 function formatPreExecutionCheckDetail(check: PreExecutionCheckJSON): string {
   const category = check.category?.trim() || "unknown category";
@@ -352,7 +424,7 @@ import {
   unitVerb,
   describeNextUnit,
 } from "./auto-dashboard.js";
-import { appendFileSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import { join, relative } from "node:path";
 import { _resetHasChangesCache } from "./native-git-bridge.js";
 import { autoCommitCurrentBranch } from "./worktree.js";
@@ -1214,6 +1286,40 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
         }
       }
 
+      if (
+        !triggerArtifactVerified &&
+        s.currentUnit.type === "validate-milestone" &&
+        (
+          agentEndMessagesIncludeSuccessfulToolResult(opts?.agentEndMessages, "gsd_reassess_roadmap") ||
+          agentEndMessagesIncludeToolCall(opts?.agentEndMessages, "gsd_reassess_roadmap") ||
+          agentEndMessagesMentionTool(opts?.agentEndMessages, "gsd_reassess_roadmap") ||
+          unitActivityMentionsTool(s.basePath, s.currentUnit.type, s.currentUnit.id, "gsd_reassess_roadmap") ||
+          unitActivityMentionsTool(s.canonicalProjectRoot, s.currentUnit.type, s.currentUnit.id, "gsd_reassess_roadmap") ||
+          hasRoadmapReassessmentArtifact(s.basePath, parseUnitId(s.currentUnit.id).milestone) ||
+          hasRoadmapReassessmentArtifact(s.canonicalProjectRoot, parseUnitId(s.currentUnit.id).milestone)
+        )
+      ) {
+        const { milestone: mid } = parseUnitId(s.currentUnit.id);
+        if (mid && (
+          agentEndMessagesIncludeSuccessfulToolResult(opts?.agentEndMessages, "gsd_reassess_roadmap") ||
+          agentEndMessagesMentionTool(opts?.agentEndMessages, "gsd_reassess_roadmap") ||
+          unitActivityMentionsTool(s.basePath, s.currentUnit.type, s.currentUnit.id, "gsd_reassess_roadmap") ||
+          unitActivityMentionsTool(s.canonicalProjectRoot, s.currentUnit.type, s.currentUnit.id, "gsd_reassess_roadmap") ||
+          hasIncompleteMilestoneSlice(mid) ||
+          hasRoadmapReassessmentArtifact(s.basePath, mid) ||
+          hasRoadmapReassessmentArtifact(s.canonicalProjectRoot, mid)
+        )) {
+          triggerArtifactVerified = true;
+          invalidateAllCaches();
+          debugLog("postUnit", {
+            phase: "validate-milestone-reassessment-invalidated-validation",
+            unitType: s.currentUnit.type,
+            unitId: s.currentUnit.id,
+            milestoneId: mid,
+          });
+        }
+      }
+
       if (!triggerArtifactVerified) {
         try {
           const { milestone: mid, slice: sid } = parseUnitId(s.currentUnit.id);
@@ -1443,6 +1549,9 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
       // of the same unit gets a full retry budget instead of the stale count.
       if (triggerArtifactVerified) {
         const retryKey = verificationRetryKey(s.currentUnit.type, s.currentUnit.id);
+        if (s.pendingVerificationRetry?.unitId === s.currentUnit.id) {
+          s.pendingVerificationRetry = null;
+        }
         s.verificationRetryCount.delete(retryKey);
         s.verificationRetryFailureHashes.delete(retryKey);
       }

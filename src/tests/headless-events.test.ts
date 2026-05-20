@@ -166,6 +166,17 @@ function makeNotify(message: string): Record<string, unknown> {
   return { type: 'extension_ui_request', method: 'notify', message }
 }
 
+function makeCommandBlock(content: string): Record<string, unknown> {
+  return {
+    type: 'message_start',
+    message: {
+      role: 'custom',
+      customType: 'gsd-command-block',
+      content,
+    },
+  }
+}
+
 // ─── mapStatusToExitCode ─────────────────────────────────────────────────
 
 test('mapStatusToExitCode: "complete" returns EXIT_SUCCESS', () => {
@@ -216,6 +227,20 @@ test('isTerminalNotification: manual merge-resolution notifications are terminal
   assert.equal(isTerminalNotification(makeNotify('Survivor-branch finalization for M001 failed: merge conflict. Resolve manually and re-run /gsd auto.')), true)
 })
 
+test('isTerminalNotification: unmerged milestone command blocks are terminal', () => {
+  assert.equal(
+    isTerminalNotification(makeCommandBlock('/gsd auto cannot start new workflow work because M001 is complete but not merged.')),
+    true,
+  )
+})
+
+test('isTerminalNotification: validation-blocked command blocks are terminal', () => {
+  assert.equal(
+    isTerminalNotification(makeCommandBlock('/gsd auto cannot run because the active milestone is blocked by validation.')),
+    true,
+  )
+})
+
 test('isBlockedNotification: pause notifications require intervention in headless mode', () => {
   assert.equal(isBlockedNotification(makeNotify('Auto-mode paused (Escape). Type to interact, or /gsd auto to resume.')), true)
   assert.equal(isBlockedNotification(makeNotify('Auto-mode paused due to provider error: connection reset')), true)
@@ -224,6 +249,17 @@ test('isBlockedNotification: pause notifications require intervention in headles
 test('isBlockedNotification: manual merge-resolution notifications require intervention', () => {
   assert.equal(isBlockedNotification(makeNotify('Merge conflict on milestone M001: src/conflict.js. Resolve conflicts manually and run /gsd auto to resume.')), true)
   assert.equal(isBlockedNotification(makeNotify('Merge error on milestone M001: remote rejected push. Resolve and run /gsd auto to resume.')), true)
+})
+
+test('isBlockedNotification: blocking command blocks require intervention', () => {
+  assert.equal(
+    isBlockedNotification(makeCommandBlock('/gsd auto cannot start new workflow work because M001 is complete but not merged.')),
+    true,
+  )
+  assert.equal(
+    isBlockedNotification(makeCommandBlock('/gsd auto cannot run because the active milestone is blocked by validation.')),
+    true,
+  )
 })
 
 test('isBlockedNotification: avoids blocked text without blocked marker', () => {

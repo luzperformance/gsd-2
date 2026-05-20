@@ -87,13 +87,35 @@ function isManualResolutionNotification(message: string): boolean {
   )
 }
 
+function getCommandBlockContent(event: Record<string, unknown>): string | null {
+  if (event.type !== 'message_start' && event.type !== 'message_end') return null
+  const message = event.message as Record<string, unknown> | undefined
+  if (message?.customType !== 'gsd-command-block') return null
+  return String(message.content ?? '').toLowerCase()
+}
+
+function isBlockingCommandBlock(event: Record<string, unknown>): boolean {
+  const content = getCommandBlockContent(event)
+  if (!content) return false
+
+  return (
+    (
+      content.includes('cannot start new workflow work') &&
+      content.includes('complete but not merged')
+    ) ||
+    content.includes('cannot run because the active milestone is blocked by validation')
+  )
+}
+
 export function isTerminalNotification(event: Record<string, unknown>): boolean {
+  if (isBlockingCommandBlock(event)) return true
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
   return TERMINAL_PREFIXES.some((prefix) => message.startsWith(prefix)) || isManualResolutionNotification(message)
 }
 
 export function isBlockedNotification(event: Record<string, unknown>): boolean {
+  if (isBlockingCommandBlock(event)) return true
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
   // Recoverable pauses need operator intervention in headless mode.

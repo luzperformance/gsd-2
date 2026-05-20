@@ -26,13 +26,34 @@ function isManualResolutionNotification(message: string): boolean {
   )
 }
 
+function getCommandBlockContent(event: Record<string, unknown>): string | null {
+  if (event.type !== 'message_start' && event.type !== 'message_end') return null
+  const message = event.message as Record<string, unknown> | undefined
+  if (message?.customType !== 'gsd-command-block') return null
+  return String(message.content ?? '').toLowerCase()
+}
+
+function isBlockingCommandBlock(event: Record<string, unknown>): boolean {
+  const content = getCommandBlockContent(event)
+  if (!content) return false
+  return (
+    (
+      content.includes('cannot start new workflow work') &&
+      content.includes('complete but not merged')
+    ) ||
+    content.includes('cannot run because the active milestone is blocked by validation')
+  )
+}
+
 function isTerminalNotification(event: Record<string, unknown>): boolean {
+  if (isBlockingCommandBlock(event)) return true
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
   return TERMINAL_PREFIXES.some((prefix) => message.startsWith(prefix)) || isManualResolutionNotification(message)
 }
 
 function isBlockedNotification(event: Record<string, unknown>): boolean {
+  if (isBlockingCommandBlock(event)) return true
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
   return message.includes('blocked:') || PAUSED_PREFIXES.some((prefix) => message.startsWith(prefix)) || isManualResolutionNotification(message)
@@ -54,6 +75,17 @@ function isQuickCommand(command: string, commandArgs: readonly string[] = []): b
 
 function makeNotify(message: string): Record<string, unknown> {
   return { type: 'extension_ui_request', method: 'notify', message }
+}
+
+function makeCommandBlock(content: string): Record<string, unknown> {
+  return {
+    type: 'message_start',
+    message: {
+      role: 'custom',
+      customType: 'gsd-command-block',
+      content,
+    },
+  }
 }
 
 // ─── isTerminalNotification ─────────────────────────────────────────────────
@@ -88,6 +120,14 @@ test("detects 'Step-mode paused.' as terminal", () => {
 
 test("detects manual merge-resolution notification as terminal", () => {
   assert.ok(isTerminalNotification(makeNotify("Survivor-branch finalization for M001 failed: merge conflict. Resolve manually and re-run /gsd auto.")))
+})
+
+test("detects unmerged milestone command block as terminal", () => {
+  assert.ok(isTerminalNotification(makeCommandBlock("/gsd auto cannot start new workflow work because M001 is complete but not merged.")))
+})
+
+test("detects validation-blocked command block as terminal", () => {
+  assert.ok(isTerminalNotification(makeCommandBlock("/gsd auto cannot run because the active milestone is blocked by validation.")))
 })
 
 // ─── False positives that previously triggered early exit (#879) ────────────
@@ -138,6 +178,11 @@ test("detects pause notifications as blocked in headless mode", () => {
 test("detects manual merge-resolution notifications as blocked", () => {
   assert.ok(isBlockedNotification(makeNotify("Merge conflict on milestone M001: src/conflict.js. Resolve conflicts manually and run /gsd auto to resume.")))
   assert.ok(isBlockedNotification(makeNotify("Merge error on milestone M001: remote rejected push. Resolve and run /gsd auto to resume.")))
+})
+
+test("detects blocking command blocks as blocked", () => {
+  assert.ok(isBlockedNotification(makeCommandBlock("/gsd auto cannot start new workflow work because M001 is complete but not merged.")))
+  assert.ok(isBlockedNotification(makeCommandBlock("/gsd auto cannot run because the active milestone is blocked by validation.")))
 })
 
 test("does NOT match 'blocked' without colon (avoids false positives)", () => {

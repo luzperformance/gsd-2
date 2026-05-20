@@ -723,6 +723,20 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
       return
     }
 
+    // Blocking command blocks are rendered as assistant messages instead of
+    // extension UI notifications, but headless still needs to stop immediately.
+    if (eventObj.type !== 'extension_ui_request') {
+      if (isBlockedNotification(eventObj)) {
+        blocked = true
+      }
+      if (isTerminalNotification(eventObj)) {
+        completed = true
+        exitCode = blocked ? EXIT_BLOCKED : EXIT_SUCCESS
+        resolveCompletion()
+        return
+      }
+    }
+
     // Handle extension_ui_request
     if (eventObj.type === 'extension_ui_request' && clientStarted) {
       // Check for terminal notification before auto-responding

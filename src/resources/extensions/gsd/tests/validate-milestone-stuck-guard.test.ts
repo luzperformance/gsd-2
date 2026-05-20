@@ -263,4 +263,38 @@ describe("validate-milestone stuck-loop guard (#4094)", () => {
     assert.match(s.pendingVerificationRetry!.failureContext, /exists but is empty/);
     assert.equal(s.pendingVerificationRetry!.attempt, 1);
   });
+
+  test("continues when same-turn roadmap reassessment invalidated the validation artifact", async () => {
+    insertMilestone({ id: "M001" });
+    insertSlice({ id: "S01", milestoneId: "M001", title: "Slice 1", status: "complete" });
+    insertSlice({ id: "S02", milestoneId: "M001", title: "Remediation", status: "queued" });
+
+    const path = join(tempDir, ".gsd", "milestones", "M001", "M001-VALIDATION.md");
+    writeFileSync(path, "", "utf-8");
+    invalidateAllCaches();
+
+    const ctx = makeMockCtx();
+    const pi = makeMockPi();
+    const pauseAutoMock = mock.fn(async () => {});
+    const s = makeMockSession(tempDir, "validate-milestone", "M001");
+    s.lastUnitAgentEndMessages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", name: "gsd_reassess_roadmap" },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "gsd_reassess_roadmap",
+        isError: false,
+      },
+    ];
+
+    const result = await runPostUnitVerification({ s, ctx, pi } as VerificationContext, pauseAutoMock);
+
+    assert.equal(result, "continue");
+    assert.equal(pauseAutoMock.mock.callCount(), 0);
+    assert.equal(s.pendingVerificationRetry, null);
+  });
 });

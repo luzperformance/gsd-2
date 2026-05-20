@@ -67,6 +67,7 @@ import { snapshotSkills } from "./skill-discovery.js";
 import { isDbAvailable, getMilestone, getAllMilestones, insertMilestone, openDatabase, getDbStatus } from "./gsd-db.js";
 import { isClosedStatus } from "./status-guards.js";
 import { classifyMilestoneSummaryContent } from "./milestone-summary-classifier.js";
+import { extractVerdict } from "./verdict-parser.js";
 import { auditOrphanedPreflightStashes } from "./orphan-stash-audit.js";
 import { parseProject } from "./schemas/parsers.js";
 
@@ -231,6 +232,14 @@ export function decideSurvivorAction(
   if (phase === "needs-discussion") return "discuss";
   if (phase === "complete") return "finalize";
   return "none";
+}
+
+export function resolveSurvivorRecoveryIsolationMode(
+  isolationMode: "worktree" | "branch" | "none",
+  phase: string | null | undefined,
+): "worktree" | "branch" | "none" {
+  if (isolationMode === "none" && phase === "complete") return "branch";
+  return isolationMode;
 }
 
 export function auditOrphanedMilestoneBranches(
@@ -521,7 +530,6 @@ export function findUnmergedCompletedMilestone(
   isolationMode: "worktree" | "branch" | "none",
 ): string | null {
   if (isolationMode === "none") return null;
-  if (!isDbAvailable()) return null;
 
   let milestoneBranches: string[];
   try {
@@ -551,11 +559,29 @@ export function findUnmergedCompletedMilestone(
     milestoneBranches,
     mergedBranches,
     (milestoneId) => {
-      const row = getMilestone(milestoneId);
-      return !!row && row.status === "complete";
+      if (isDbAvailable()) {
+        const row = getMilestone(milestoneId);
+        if (row) return row.status === "complete";
+      }
+      return isCompletedMilestoneOnDisk(basePath, milestoneId);
     },
     (branch) => nativeCommitCountBetween(basePath, mainBranch, branch),
   );
+}
+
+function isCompletedMilestoneOnDisk(basePath: string, milestoneId: string): boolean {
+  const summaryPath = resolveMilestoneFile(basePath, milestoneId, "SUMMARY");
+  const validationPath = resolveMilestoneFile(basePath, milestoneId, "VALIDATION");
+  if (!summaryPath || !validationPath) return false;
+
+  try {
+    const summary = readFileSync(summaryPath, "utf-8");
+    if (classifyMilestoneSummaryContent(summary) === "failure") return false;
+    const validation = readFileSync(validationPath, "utf-8");
+    return extractVerdict(validation) != null;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -952,13 +978,15 @@ export async function bootstrapAutoSession(
     // Applies to both worktree and branch isolation modes.
     let hasSurvivorBranch = false;
     let survivorMilestoneId = state.activeMilestone?.id ?? null;
+    const configuredIsolationMode = getIsolationMode(base);
+    const survivorIsolationMode = resolveSurvivorRecoveryIsolationMode(configuredIsolationMode, state.phase);
     if (!survivorMilestoneId && state.phase === "complete") {
-      survivorMilestoneId = findUnmergedCompletedMilestone(base, getIsolationMode(base));
+      survivorMilestoneId = findUnmergedCompletedMilestone(base, survivorIsolationMode);
     }
     if (
       survivorMilestoneId &&
       (state.phase === "pre-planning" || state.phase === "complete") &&
-      getIsolationMode(base) !== "none" &&
+      survivorIsolationMode !== "none" &&
       !detectWorktreeName(base) &&
       !base.includes(`${pathSep}.gsd${pathSep}worktrees${pathSep}`)
     ) {
@@ -1041,7 +1069,7 @@ export async function bootstrapAutoSession(
     // Mirrors the survivor-finalize block above. Failures degrade to a
     // warning notify so a transient git error doesn't block bootstrap.
     {
-      const orphan = findUnmergedCompletedMilestone(base, getIsolationMode(base));
+      const orphan = findUnmergedCompletedMilestone(base, survivorIsolationMode);
       if (orphan && orphan !== state.activeMilestone?.id) {
         // ADR-016 phase 2 / B4 (#5622): the swap-run-revert protocol for
         // the orphan-merge dance is owned by `adoptOrphanWorktree`. The

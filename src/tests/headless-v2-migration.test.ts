@@ -48,13 +48,34 @@ function isManualResolutionNotification(message: string): boolean {
   )
 }
 
+function getCommandBlockContent(event: Record<string, unknown>): string | null {
+  if (event.type !== 'message_start' && event.type !== 'message_end') return null
+  const message = event.message as Record<string, unknown> | undefined
+  if (message?.customType !== 'gsd-command-block') return null
+  return String(message.content ?? '').toLowerCase()
+}
+
+function isBlockingCommandBlock(event: Record<string, unknown>): boolean {
+  const content = getCommandBlockContent(event)
+  if (!content) return false
+  return (
+    (
+      content.includes('cannot start new workflow work') &&
+      content.includes('complete but not merged')
+    ) ||
+    content.includes('cannot run because the active milestone is blocked by validation')
+  )
+}
+
 function isTerminalNotification(event: Record<string, unknown>): boolean {
+  if (isBlockingCommandBlock(event)) return true
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
   return TERMINAL_PREFIXES.some((prefix) => message.startsWith(prefix)) || isManualResolutionNotification(message)
 }
 
 function isBlockedNotification(event: Record<string, unknown>): boolean {
+  if (isBlockingCommandBlock(event)) return true
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
   return message.includes('blocked:') || PAUSED_PREFIXES.some((prefix) => message.startsWith(prefix)) || isManualResolutionNotification(message)
@@ -169,6 +190,17 @@ function handleEvent(
     state.exitCode = mapStatusToExitCode(status)
     if (eventObj.status === 'blocked') state.blocked = true
     return
+  }
+
+  if (eventObj.type !== 'extension_ui_request') {
+    if (isBlockedNotification(eventObj)) {
+      state.blocked = true
+    }
+    if (isTerminalNotification(eventObj)) {
+      state.completed = true
+      state.exitCode = state.blocked ? EXIT_BLOCKED : EXIT_SUCCESS
+      return
+    }
   }
 
   // extension_ui_request (v1 fallback + UI responses)
@@ -657,6 +689,28 @@ test('multi-turn commands detect blocked via terminal notification', () => {
     state,
     client,
   )
+  assert.equal(state.completed, true)
+  assert.equal(state.blocked, true)
+  assert.equal(state.exitCode, EXIT_BLOCKED)
+})
+
+test('multi-turn commands detect blocked command blocks as terminal', () => {
+  const client = new MockRpcClient()
+  const state: EventHandlerState = { completed: false, blocked: false, exitCode: -1, v2Enabled: true, isMultiTurnCommand: true }
+
+  handleEvent(
+    {
+      type: 'message_start',
+      message: {
+        role: 'custom',
+        customType: 'gsd-command-block',
+        content: '/gsd auto cannot start new workflow work because M001 is complete but not merged.',
+      },
+    },
+    state,
+    client,
+  )
+
   assert.equal(state.completed, true)
   assert.equal(state.blocked, true)
   assert.equal(state.exitCode, EXIT_BLOCKED)

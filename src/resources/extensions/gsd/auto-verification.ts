@@ -14,7 +14,7 @@
  */
 
 import type { ExtensionContext, ExtensionAPI } from "@gsd/pi-coding-agent";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { gsdProjectionRoot, resolveSliceFile, resolveSlicePath, resolveMilestoneFile } from "./paths.js";
 import { resolveCanonicalMilestoneRoot } from "./worktree-manager.js";
 import { parseUnitId } from "./unit-id.js";
@@ -126,6 +126,56 @@ function hasExplicitVerificationTargets(task: TaskRow | null, slice: SliceRow | 
   return Boolean(task?.target_repositories?.length || slice?.target_repositories?.length);
 }
 
+function messagesMentionTool(messages: unknown[] | null | undefined, toolName: string): boolean {
+  if (!Array.isArray(messages)) return false;
+  try {
+    return JSON.stringify(messages).includes(toolName);
+  } catch {
+    return false;
+  }
+}
+
+function unitActivityMentionsTool(basePath: string, unitType: string, unitId: string, toolName: string): boolean {
+  const safeUnitId = unitId.replace(/\//g, "-");
+  const activityDir = join(basePath, ".gsd", "activity");
+  if (!existsSync(activityDir)) return false;
+
+  try {
+    for (const entry of readdirSync(activityDir, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.endsWith(`${unitType}-${safeUnitId}.jsonl`)) continue;
+      if (readFileSync(join(activityDir, entry.name), "utf-8").includes(toolName)) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function hasRoadmapReassessmentArtifact(basePath: string, milestoneId: string): boolean {
+  const slicesDir = join(basePath, ".gsd", "milestones", milestoneId, "slices");
+  if (!existsSync(slicesDir)) return false;
+
+  try {
+    for (const entry of readdirSync(slicesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (existsSync(join(slicesDir, entry.name, `${entry.name}-ASSESSMENT.md`))) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function hasReassessmentEvidence(s: AutoSession, milestoneId: string): boolean {
+  if (!s.currentUnit) return false;
+  const toolName = "gsd_reassess_roadmap";
+  const roots = [...new Set([s.basePath, s.canonicalProjectRoot].filter(Boolean))];
+  return messagesMentionTool(s.lastUnitAgentEndMessages, toolName)
+    || roots.some((root) => unitActivityMentionsTool(root, s.currentUnit!.type, s.currentUnit!.id, toolName))
+    || roots.some((root) => hasRoadmapReassessmentArtifact(root, milestoneId));
+}
+
 
 /**
  * Post-unit guard for `validate-milestone` units (#4094).
@@ -183,8 +233,14 @@ async function runValidateMilestonePostCheck(
   const { milestone: mid } = parseUnitId(s.currentUnit.id);
   if (!mid) return "continue";
 
+  const retryKey = verificationRetryKey(s.currentUnit.type, s.currentUnit.id);
+  const clearValidationRetry = (): void => {
+    s.pendingVerificationRetry = null;
+    s.verificationRetryCount.delete(retryKey);
+    s.verificationRetryFailureHashes.delete(retryKey);
+  };
+
   const setToolFailureRetry = (message: string): VerificationResult => {
-    const retryKey = verificationRetryKey(s.currentUnit!.type, s.currentUnit!.id);
     const attempt = (s.verificationRetryCount.get(retryKey) ?? 0) + 1;
     s.verificationRetryCount.set(retryKey, attempt);
     s.pendingVerificationRetry = {
@@ -195,6 +251,14 @@ async function runValidateMilestonePostCheck(
     return "retry";
   };
 
+  const reassessmentInvalidatedValidation = async (): Promise<boolean> => {
+    if (!hasReassessmentEvidence(s, mid)) return false;
+    const incompleteSliceCount = await countIncompleteSlices(s.canonicalProjectRoot, mid);
+    const hasAssessmentArtifact = [s.basePath, s.canonicalProjectRoot]
+      .some((root) => hasRoadmapReassessmentArtifact(root, mid));
+    return incompleteSliceCount > 0 || hasAssessmentArtifact;
+  };
+
   const validationBasePath = resolveCanonicalMilestoneRoot(s.basePath, mid);
   const validationFile = join(
     gsdProjectionRoot(validationBasePath),
@@ -203,6 +267,10 @@ async function runValidateMilestonePostCheck(
     `${mid}-VALIDATION.md`,
   );
   if (!validationFile) {
+    if (await reassessmentInvalidatedValidation()) {
+      clearValidationRetry();
+      return "continue";
+    }
     return setToolFailureRetry(
       "You must call gsd_validate_milestone to persist the validation results. No VALIDATION.md was created.",
     );
@@ -210,6 +278,10 @@ async function runValidateMilestonePostCheck(
 
   const validationContent = await loadFile(validationFile);
   if (!validationContent) {
+    if (await reassessmentInvalidatedValidation()) {
+      clearValidationRetry();
+      return "continue";
+    }
     return setToolFailureRetry(
       "You must call gsd_validate_milestone to persist the validation results. VALIDATION.md exists but is empty.",
     );
