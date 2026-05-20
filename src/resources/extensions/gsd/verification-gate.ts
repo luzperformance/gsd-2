@@ -340,7 +340,7 @@ export function isLikelyCommand(cmd: string): boolean {
  */
 export function validateVerificationCommand(cmd: string): { ok: true } | { ok: false; reason: string } {
   if (hasUnsafeShellSyntax(cmd)) {
-    return { ok: false, reason: "contains shell control syntax such as pipes, redirects, semicolons, backticks, or command substitution" };
+    return { ok: false, reason: "contains shell control syntax such as pipes, `||` fallbacks, redirects, semicolons, backticks, or command substitution" };
   }
   if (!isLikelyCommand(cmd)) {
     return { ok: false, reason: "does not look like a runnable command" };
