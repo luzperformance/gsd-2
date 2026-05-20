@@ -286,6 +286,166 @@ test("postUnitPreVerification continues closeout when artifact cost spike is obs
   }
 });
 
+test("postUnitPreVerification accepts validation invalidated by same-turn reassessment", async () => {
+  const base = mkdtempSync(join(tmpdir(), "gsd-post-unit-validation-reassess-"));
+  const notifications: string[] = [];
+  const pauseCalls = { count: 0 };
+  try {
+    writeProjectPreferences(base);
+    const milestoneDir = join(base, ".gsd", "milestones", "M001");
+    const sliceDir = join(milestoneDir, "slices", "S01");
+    mkdirSync(sliceDir, { recursive: true });
+    writeFileSync(
+      join(milestoneDir, "M001-ROADMAP.md"),
+      [
+        "# M001: Test Milestone",
+        "",
+        "## Slices",
+        "",
+        "- [x] **S01: Done** `risk:low` `depends:[]`",
+        "- [ ] **S02: Remediation** `risk:medium` `depends:[S01]`",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    writeFileSync(join(sliceDir, "S01-SUMMARY.md"), "# S01\n\nDone.\n", "utf-8");
+
+    closeDatabase();
+    openDatabase(join(base, ".gsd", "gsd.db"));
+    insertMilestone({ id: "M001", title: "Test Milestone", status: "active", depends_on: [] });
+    insertSlice({
+      id: "S01",
+      milestoneId: "M001",
+      title: "Done",
+      status: "complete",
+      risk: "low",
+      depends: [],
+      demo: "",
+      sequence: 1,
+    });
+    insertSlice({
+      id: "S02",
+      milestoneId: "M001",
+      title: "Remediation",
+      status: "pending",
+      risk: "medium",
+      depends: ["S01"],
+      demo: "",
+      sequence: 2,
+    });
+
+    const s = new AutoSession();
+    s.basePath = base;
+    s.originalBasePath = base;
+    s.currentMilestoneId = "M001";
+    s.currentUnit = { type: "validate-milestone", id: "M001", startedAt: Date.now() };
+    s.pendingVerificationRetry = {
+      unitId: "M001",
+      failureContext: "stale validation artifact retry",
+      attempt: 1,
+    };
+
+    const result = await postUnitPreVerification(
+      makePostUnitContext(s, notifications, pauseCalls),
+      {
+        skipSettleDelay: true,
+        skipWorktreeSync: true,
+        agentEndMessages: [{
+          role: "assistant",
+          content: [{
+            type: "toolCall",
+            id: "add-remediation-slice",
+            name: "gsd_reassess_roadmap",
+            arguments: { milestoneId: "M001" },
+          }],
+        }],
+      },
+    );
+
+    assert.equal(result, "continue");
+    assert.equal(pauseCalls.count, 0);
+    assert.equal(s.pendingVerificationRetry, null);
+  } finally {
+    closeDatabase();
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("postUnitPreVerification accepts successful reassessment result even before slice state refresh", async () => {
+  const base = mkdtempSync(join(tmpdir(), "gsd-post-unit-reassess-result-"));
+  const notifications: string[] = [];
+  const pauseCalls = { count: 0 };
+  try {
+    writeProjectPreferences(base);
+    mkdirSync(join(base, ".gsd", "milestones", "M001"), { recursive: true });
+
+    closeDatabase();
+    openDatabase(join(base, ".gsd", "gsd.db"));
+    insertMilestone({ id: "M001", title: "Test Milestone", status: "active", depends_on: [] });
+
+    const s = new AutoSession();
+    s.basePath = base;
+    s.originalBasePath = base;
+    s.currentMilestoneId = "M001";
+    s.currentUnit = { type: "validate-milestone", id: "M001", startedAt: Date.now() };
+
+    const result = await postUnitPreVerification(
+      makePostUnitContext(s, notifications, pauseCalls),
+      {
+        skipSettleDelay: true,
+        skipWorktreeSync: true,
+        agentEndMessages: [{
+          role: "toolResult",
+          toolName: "gsd_reassess_roadmap",
+          isError: false,
+          content: [{ type: "text", text: "Reassessed roadmap for milestone M001 after S01" }],
+        }],
+      },
+    );
+
+    assert.equal(result, "continue");
+    assert.equal(pauseCalls.count, 0);
+    assert.equal(s.pendingVerificationRetry, null);
+  } finally {
+    closeDatabase();
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("postUnitPreVerification accepts validation replaced by reassessment artifact on disk", async () => {
+  const base = mkdtempSync(join(tmpdir(), "gsd-post-unit-reassess-disk-"));
+  const notifications: string[] = [];
+  const pauseCalls = { count: 0 };
+  try {
+    writeProjectPreferences(base);
+    const assessmentDir = join(base, ".gsd", "milestones", "M001", "slices", "S01");
+    mkdirSync(assessmentDir, { recursive: true });
+    writeFileSync(join(assessmentDir, "S01-ASSESSMENT.md"), "# S01 Assessment\n\nAdd S02.\n", "utf-8");
+
+    closeDatabase();
+    openDatabase(join(base, ".gsd", "gsd.db"));
+    insertMilestone({ id: "M001", title: "Test Milestone", status: "active", depends_on: [] });
+
+    const s = new AutoSession();
+    s.basePath = base;
+    s.originalBasePath = base;
+    s.currentMilestoneId = "M001";
+    s.currentUnit = { type: "validate-milestone", id: "M001", startedAt: Date.now() };
+
+    const result = await postUnitPreVerification(
+      makePostUnitContext(s, notifications, pauseCalls),
+      { skipSettleDelay: true, skipWorktreeSync: true },
+    );
+
+    assert.equal(result, "continue");
+    assert.equal(pauseCalls.count, 0);
+    assert.equal(s.pendingVerificationRetry, null);
+  } finally {
+    closeDatabase();
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test("postUnitPreVerification still pauses on artifact cost spike when same unit remains next", async () => {
   const base = mkdtempSync(join(tmpdir(), "gsd-post-unit-cost-same-"));
   const notifications: string[] = [];

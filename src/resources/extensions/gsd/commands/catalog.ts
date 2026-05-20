@@ -18,7 +18,7 @@ export const GSD_COMMAND_DESCRIPTION =
 
 export const TOP_LEVEL_SUBCOMMANDS: readonly GsdCommandDefinition[] = [
   { cmd: "help", desc: "Categorized command reference with descriptions" },
-  { cmd: "next", desc: "Explicit step mode (same as /gsd)" },
+  { cmd: "next", desc: "Explicit step mode — run one unit, then pause" },
   { cmd: "auto", desc: "Autonomous mode — research, plan, execute, commit, repeat" },
   { cmd: "stop", desc: "Stop auto mode gracefully" },
   { cmd: "pause", desc: "Pause auto-mode (preserves state, /gsd auto to resume)" },

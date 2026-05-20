@@ -170,7 +170,7 @@ describe("headless auto pause e2e (fake LLM)", () => {
 				"--output-format",
 				"stream-json",
 				"--events",
-				"extension_ui_request,agent_end",
+				"extension_ui_request,message_start,message_end,agent_end",
 				"--model",
 				"gsd-fake-model",
 				"--timeout",
@@ -251,7 +251,7 @@ describe("headless auto pause e2e (fake LLM)", () => {
 				"--output-format",
 				"stream-json",
 				"--events",
-				"extension_ui_request,agent_end",
+				"extension_ui_request,message_start,message_end,agent_end",
 				"--model",
 				"gsd-fake-model",
 				"--timeout",
@@ -282,18 +282,22 @@ describe("headless auto pause e2e (fake LLM)", () => {
 		const notifyMessages = events
 			.filter((event) => event.type === "extension_ui_request" && event.method === "notify")
 			.map((event) => String(event.message ?? ""));
+		const commandMessages = events
+			.filter((event) => event.type === "message_start" || event.type === "message_end")
+			.map((event) => String((event.message as { content?: unknown } | undefined)?.content ?? ""));
+		const visibleMessages = [...notifyMessages, ...commandMessages];
 
 		assert.ok(
-			notifyMessages.some((message) => /survivor-branch finalization for M001 failed/i.test(message)),
-			`expected survivor finalization failure notification, got:\n${notifyMessages.join("\n")}`,
+			visibleMessages.some((message) => /M001 is complete but not merged/i.test(message)),
+			`expected unmerged milestone blocker, got:\n${visibleMessages.join("\n")}`,
 		);
 		assert.ok(
-			notifyMessages.some((message) => /src\/conflict\.js/.test(message)),
-			`expected conflicted source file in notifications, got:\n${notifyMessages.join("\n")}`,
+			visibleMessages.some((message) => /src\/conflict\.js/.test(message)),
+			`expected conflicted source file in messages, got:\n${visibleMessages.join("\n")}`,
 		);
 		assert.ok(
-			notifyMessages.some((message) => /resolve manually and re-run \/gsd auto/i.test(message)),
-			`expected manual resume instruction, got:\n${notifyMessages.join("\n")}`,
+			visibleMessages.some((message) => /\/gsd dispatch complete-milestone M001/i.test(message)),
+			`expected complete-milestone repair instruction, got:\n${visibleMessages.join("\n")}`,
 		);
 
 		assert.throws(

@@ -176,6 +176,7 @@ function hasReassessmentEvidence(s: AutoSession, milestoneId: string): boolean {
     || roots.some((root) => hasRoadmapReassessmentArtifact(root, milestoneId));
 }
 
+
 /**
  * Post-unit guard for `validate-milestone` units (#4094).
  *

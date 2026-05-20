@@ -17,6 +17,12 @@ describe("formatToolCallSummary", () => {
 		);
 	});
 
+	it("normalizes Windows separators in shortened paths", () => {
+		const filePath = `${os.homedir()}\\project\\src\\index.ts`;
+
+		assert.equal(formatToolCallSummary("read", { path: filePath }), "[read: ~/project/src/index.ts]");
+	});
+
 	it("normalizes multiline bash commands before truncating them", () => {
 		assert.equal(
 			formatToolCallSummary("bash", { command: "npm test\nnpm run build\t-- --verbose" }),

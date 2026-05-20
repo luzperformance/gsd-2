@@ -605,6 +605,94 @@ test("stopAuto completion closeout reroots session, restores cwd, and preserves 
   }
 });
 
+test("stopAuto completion closeout emits a headless terminal notification without replacing the final widget", async () => {
+  const base = mkdtempSync(join(tmpdir(), "gsd-headless-completion-stop-"));
+  const previousCwd = process.cwd();
+  const previousHeadless = process.env.GSD_HEADLESS;
+  const widgetCalls: Array<[string, unknown]> = [];
+  const notifications: string[] = [];
+  const milestoneDir = join(base, ".gsd", "milestones", "M003");
+  mkdirSync(milestoneDir, { recursive: true });
+  writeFileSync(join(milestoneDir, "M003-SUMMARY.md"), [
+    "---",
+    "id: M003",
+    'title: "Budget tracking"',
+    "status: complete",
+    "---",
+    "",
+    "# M003: Budget tracking",
+    "",
+    "**Completed budget tracking.**",
+    "",
+  ].join("\n"), "utf-8");
+
+  autoSession.reset();
+  openDatabase(join(base, "gsd-test.db"));
+  insertMilestone({ id: "M003", title: "Budget tracking", status: "complete" });
+  insertSlice({ id: "S01", milestoneId: "M003", title: "Complete slice", status: "complete", sequence: 1 });
+
+  process.env.GSD_HEADLESS = "1";
+  autoSession.active = true;
+  autoSession.paused = false;
+  autoSession.basePath = join(base, ".gsd", "worktrees", "M003");
+  autoSession.originalBasePath = base;
+  autoSession.currentMilestoneId = "M003";
+  autoSession.autoStartTime = Date.now() - 60_000;
+  autoSession.cmdCtx = {
+    newSession: async () => ({ cancelled: false }),
+    sessionManager: { getEntries: () => [] },
+    getContextUsage: () => ({ percent: 0.1, contextWindow: 1_000_000 }),
+    model: { contextWindow: 1_000_000 },
+  } as any;
+
+  try {
+    await stopAuto(
+      {
+        hasUI: true,
+        ui: {
+          setStatus: () => {},
+          setWidget: (key: string, value: unknown) => {
+            widgetCalls.push([key, value]);
+          },
+          setHeader: () => {},
+          notify: (message: string) => {
+            notifications.push(message);
+          },
+        },
+        modelRegistry: { find: () => null },
+      } as any,
+      { events: { emit: () => {} } } as any,
+      "Milestone M003 complete",
+      {
+        completionWidget: {
+          milestoneId: "M003",
+          milestoneTitle: "Budget tracking",
+        },
+      },
+    );
+
+    assert.ok(
+      notifications.some(message => /^Auto-mode stopped/i.test(message) && /Milestone M003 complete/i.test(message)),
+      "headless completion closeout must emit the terminal stop notification headless waits for",
+    );
+    assert.equal(
+      typeof widgetCalls.filter(([key]) => key === "gsd-progress").at(-1)?.[1],
+      "function",
+      "headless completion closeout must still leave the final roll-up widget installed",
+    );
+  } finally {
+    if (previousHeadless === undefined) {
+      delete process.env.GSD_HEADLESS;
+    } else {
+      process.env.GSD_HEADLESS = previousHeadless;
+    }
+    try { closeDatabase(); } catch { /* noop */ }
+    autoSession.reset();
+    process.chdir(previousCwd);
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test("stopAuto all-complete closeout clears active progress and leaves final outcome", async () => {
   const base = mkdtempSync(join(tmpdir(), "gsd-all-complete-closeout-"));
   const previousCwd = process.cwd();
