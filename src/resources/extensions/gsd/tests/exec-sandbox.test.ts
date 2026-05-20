@@ -90,15 +90,15 @@ test('runExecSandbox: forwards only allowlisted env vars', async () => {
   const base = freshBase();
   try {
     const result = await runExecSandbox(
-      { runtime: 'bash', script: 'echo PATH=$PATH SECRET=$GSD_TEST_SECRET' },
+      { runtime: 'bash', script: 'echo PATH=$PATH BLOCKED=$GSD_TEST_BLOCKED_VALUE' },
       baseOpts(base, {
         env_allowlist: [],
-        env: { PATH: '/usr/bin:/bin', HOME: '/tmp', GSD_TEST_SECRET: 'should-be-blocked' },
+        env: { PATH: '/usr/bin:/bin', HOME: '/tmp', GSD_TEST_BLOCKED_VALUE: 'blocked-value' },
       }),
     );
     const stdout = readFileSync(result.stdout_path, 'utf-8');
     assert.ok(stdout.includes('PATH=/usr/bin:/bin'), 'PATH forwarded');
-    assert.ok(!stdout.includes('should-be-blocked'), 'non-allowlisted var blocked');
+    assert.ok(!stdout.includes('blocked-value'), 'non-allowlisted var blocked');
   } finally {
     cleanup(base);
   }
