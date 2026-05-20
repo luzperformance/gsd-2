@@ -1564,6 +1564,9 @@ export async function stopAuto(
         allMilestonesComplete: options.completionWidget.allMilestonesComplete,
         basePath: s.originalBasePath || s.basePath || null,
       });
+      if (process.env.GSD_HEADLESS === "1") {
+        ctx.ui.notify(`Auto-mode stopped${reasonSuffix}.`, "info");
+      }
     }
 
     // ── Step 9: Cmux sidebar / event log ──
