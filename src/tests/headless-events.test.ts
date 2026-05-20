@@ -271,3 +271,27 @@ test('shouldRestartHeadlessRun: deterministic no-work tail is not restartable', 
   })
   assert.equal(shouldRestart, false)
 })
+
+test('shouldRestartHeadlessRun: events present but no tool calls → not restartable', () => {
+  // totalEvents > 0 but toolCallCount === 0: neither restart condition is met
+  const shouldRestart = shouldRestartHeadlessRun({
+    exitCode: EXIT_ERROR,
+    interrupted: false,
+    totalEvents: 6,
+    toolCallCount: 0,
+    recentEvents: [],
+  })
+  assert.equal(shouldRestart, false)
+})
+
+test('shouldRestartHeadlessRun: tool calls present but totalEvents <= 5 → not restartable', () => {
+  // toolCallCount > 0 but totalEvents is not > 5: second restart condition fails
+  const shouldRestart = shouldRestartHeadlessRun({
+    exitCode: EXIT_ERROR,
+    interrupted: false,
+    totalEvents: 4,
+    toolCallCount: 2,
+    recentEvents: [],
+  })
+  assert.equal(shouldRestart, false)
+})

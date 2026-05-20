@@ -162,7 +162,7 @@ export function shouldRestartHeadlessRun(summary: HeadlessRunSummary): boolean {
   if (hasDeterministicNoWorkTail(summary.recentEvents)) return false
   if (summary.totalEvents === 0) return true
   if (summary.toolCallCount > 0 && summary.totalEvents > 5) return true
-  return true
+  return false
 }
 
 // ---------------------------------------------------------------------------

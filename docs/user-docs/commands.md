@@ -353,7 +353,7 @@ echo "Build a CLI tool" | gsd headless new-milestone --context -
 
 **Exit codes:** `0` = complete, `1` = error or timeout, `2` = blocked.
 
-In `--output-format json` summaries, headless can also return `status: "no-work-deterministic"` for repeatable no-progress tails (for example select → input → cancelled). This status exits with code `1` and suppresses automatic restart loops.
+In JSON output summaries, headless can also return `status: "no-work-deterministic"` for repeatable no-progress tails (for example select → input → cancelled). This status exits with code `1` and suppresses automatic restart loops.
 
 Any `/gsd` subcommand works as a positional argument — `gsd headless status`, `gsd headless doctor`, `gsd headless dispatch execute`, etc.
 
