@@ -383,6 +383,11 @@ function lifecycleAutoWorktreeBranch(
     autoWorktreeBranch(milestoneId);
 }
 
+/**
+ * Dispatch teardown to the override registered in `deps`, or fall back to
+ * the real `teardownAutoWorktree`. Centralises testability: tests inject an
+ * override; production code uses the real implementation transparently.
+ */
 function lifecycleTeardownAutoWorktree(
   deps: WorktreeLifecycleDeps,
   basePath: string,
@@ -1503,6 +1508,11 @@ export class WorktreeLifecycle {
 
   // ── Private — exit without merge ─────────────────────────────────────
 
+  /**
+   * Auto-commit and tear down the worktree without merging to main.
+   * When `opts.preserveWorktree` is true the worktree directory is left on
+   * disk (slice-parallel dispatch keeps the parent worktree for re-entry).
+   */
   private _exitWithoutMerge(
     milestoneId: string,
     ctx: NotifyCtx,
