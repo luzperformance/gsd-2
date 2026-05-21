@@ -2699,7 +2699,7 @@ test("autoLoop handles dispatch skip action by continuing", async (t) => {
   const skippedIterationEnd = journalEvents.find((e) => e.eventType === "iteration-end");
   assert.deepEqual(
     skippedIterationEnd?.data,
-    { iteration: 1 },
+    { iteration: 1, skipped: true },
     "dispatch skip must close the skipped iteration before re-deriving state",
   );
   assert.ok(
