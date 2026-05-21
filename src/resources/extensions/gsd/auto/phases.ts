@@ -2281,6 +2281,7 @@ export async function runUnitPhase(
     unitType,
     unitId,
   });
+  const pausedBeforeRun = s.paused;
   const unitResult = await runUnit(
     ctx,
     pi,
@@ -2358,6 +2359,16 @@ export async function runUnitPhase(
 
   if (unitResult.status === "cancelled") {
     if (_isPauseOriginCancelledResult(s.paused, unitResult.errorContext)) {
+      if (!pausedBeforeRun) {
+        const pauseContext = {
+          message: "Auto-mode paused during unit setup",
+          category: "aborted" as const,
+          isTransient: true,
+        };
+        await deps.autoCommitUnit?.(s.basePath, unitType, unitId, ctx);
+        await emitCancelledUnitEnd(ic, unitType, unitId, unitStartSeq, pauseContext);
+        return { action: "break", reason: "pause-during-setup" };
+      }
       debugLog("autoLoop", { phase: "cancelled-after-pause", unitType, unitId });
       return { action: "break", reason: "paused" };
     }
