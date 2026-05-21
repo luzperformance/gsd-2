@@ -1260,6 +1260,12 @@ export function _resolveAutoWorktreeExitActionForTest(
   return action === "none" ? "skip" : action;
 }
 
+/**
+ * Stop the running auto engine: tears down timers, releases locks, exits the
+ * current milestone (with optional worktree preservation for slice-parallel
+ * dispatch), and resets all engine state. Safe to call when the engine is
+ * already stopped.
+ */
 export async function stopAuto(
   ctx?: ExtensionContext,
   pi?: ExtensionAPI,
@@ -1426,7 +1432,11 @@ export async function stopAuto(
           // Milestone still in progress — preserve branch for later resumption
           const r = lifecycle.exitMilestone(
             stopMilestoneId,
-            { merge: false, preserveBranch: true },
+            {
+              merge: false,
+              preserveBranch: true,
+              preserveWorktree: options.preserveWorktree ?? false,
+            },
             notifyCtx,
           );
           if (!r.ok && r.cause instanceof Error) throw r.cause;
