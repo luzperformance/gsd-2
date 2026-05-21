@@ -25,7 +25,7 @@ import {
 
 import type { MigrationPreview, WrittenFiles } from "./writer.js";
 import { ensureDbOpen } from "../bootstrap/dynamic-tools.js";
-import { clearArtifacts, clearEngineHierarchy, transaction, _getAdapter } from "../gsd-db.js";
+import { clearArtifacts, clearDecisions, clearRequirements, clearEngineHierarchy, transaction } from "../gsd-db.js";
 import { migrateFromMarkdown } from "../md-importer.js";
 import { invalidateStateCache } from "../state.js";
 import {
@@ -88,14 +88,10 @@ export async function importWrittenMigrationToDb(
   }
 
   const counts = transaction(() => {
-    const adapter = _getAdapter();
-    if (!adapter) {
-      throw new Error("failed to access the GSD database adapter for migration import");
-    }
     clearEngineHierarchy();
     clearArtifacts();
-    adapter.exec("DELETE FROM decisions");
-    adapter.exec("DELETE FROM requirements");
+    clearDecisions();
+    clearRequirements();
     const imported = migrateFromMarkdown(basePath);
     if (preview) assertMigrationImportMatchesPreview(imported, preview);
     return imported;
