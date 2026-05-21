@@ -84,6 +84,7 @@ import {
   getBudgetAlertLevel,
   getNewBudgetAlertLevel,
   getBudgetEnforcementAction,
+  getContextPauseAction,
 } from "./auto-budget.js";
 import {
   markToolStart as _markToolStart,
@@ -188,6 +189,7 @@ import { recoverFailedMigration } from "./migrate-external.js";
 import { initRegistry, convertDispatchRules } from "./rule-registry.js";
 import { emitJournalEvent as _emitJournalEvent, type JournalEntry } from "./journal.js";
 import { isClosedStatus } from "./status-guards.js";
+import { MILESTONE_ID_RE } from "./milestone-ids.js";
 import {
   type AutoDashboardData,
   updateProgressWidget as _updateProgressWidget,
@@ -212,6 +214,8 @@ import { writeUnitRuntimeRecord } from "./unit-runtime.js";
 import { countPendingCaptures } from "./captures.js";
 import { CMUX_CHANNELS, type CmuxLogLevel } from "../shared/cmux-events.js";
 import { ensureDbOpen } from "./bootstrap/dynamic-tools.js";
+import { getValidationBlockMessageForBase } from "./validation-block-guard.js";
+import { getUnmergedMilestoneBlockMessageForBase } from "./unmerged-milestone-guard.js";
 
 function makeCmuxEmitters(pi: ExtensionAPI) {
   return {
@@ -246,6 +250,10 @@ import type { AutoAdvanceResult, AutoOrchestrationModule, AutoOrchestratorDeps, 
 import { reconcileBeforeDispatch } from "./state-reconciliation.js";
 import { compileUnitToolContract } from "./tool-contract.js";
 import { createWorktreeSafetyModule } from "./worktree-safety.js";
+import {
+  repairAutoWorktreeSafetyFailure,
+  resolvePausedAutoWorktreePath,
+} from "./auto-worktree-repair.js";
 import { resolveManifest } from "./unit-context-manifest.js";
 import { classifyFailure } from "./recovery-classification.js";
 import { supportsStructuredQuestions } from "./workflow-mcp.js";
@@ -302,7 +310,6 @@ import { createWorkspace, scopeMilestone } from "./workspace.js";
 import {
   registerAutoWorker,
   markWorkerStopping,
-  markWorkerStoppingByPid,
 } from "./db/auto-workers.js";
 import { releaseMilestoneLease } from "./db/milestone-leases.js";
 import { normalizeRealPath } from "./paths.js";
@@ -328,6 +335,20 @@ export function formatAutoStopNotification(prefix: string, totals: { cost: numbe
     `${prefix}.`,
     `Session: ${formatCost(totals.cost)} · ${formatTokenCount(totals.tokens.total)} tokens · ${unitCount} units`,
   ].join("\n");
+}
+
+function isBlockedStopReason(reason?: string | null): boolean {
+  return /^Blocked:\s*/i.test(reason ?? "");
+}
+
+function formatAutoStopDisplayReason(reason?: string | null): string {
+  return (reason ?? "").replace(/^Blocked:\s*/i, "").trim();
+}
+
+export function formatAutoStopNotificationPrefix(reason?: string | null): string {
+  const displayReason = formatAutoStopDisplayReason(reason);
+  const prefix = isBlockedStopReason(reason) ? "Auto-mode blocked" : "Auto-mode stopped";
+  return displayReason ? `${prefix} — ${displayReason}` : prefix;
 }
 
 /**
@@ -500,6 +521,9 @@ function handlePausedSessionResumeRecovery(
 
   if (completedPausedUnit) {
     state.pausedSessionFile = null;
+    state.pausedUnitType = null;
+    state.pausedUnitId = null;
+    state.pendingCrashRecovery = null;
     return { skippedReplay: true };
   }
 
@@ -514,6 +538,8 @@ function handlePausedSessionResumeRecovery(
     notify(`Recovered ${recovery.trace.toolCallCount} tool calls from paused session. Resuming with context.`);
   }
   state.pausedSessionFile = null;
+  state.pausedUnitType = null;
+  state.pausedUnitId = null;
   return { skippedReplay: false };
 }
 
@@ -608,6 +634,7 @@ export {
   getBudgetAlertLevel,
   getNewBudgetAlertLevel,
   getBudgetEnforcementAction,
+  getContextPauseAction,
 } from "./auto-budget.js";
 
 function closeOutSignalInterruptedUnit(currentBasePath: string): void {
@@ -656,7 +683,17 @@ function registerSigtermHandler(currentBasePath: string): void {
   s.sigtermHandler = _registerSigtermHandler(
     currentBasePath,
     s.sigtermHandler,
-    () => closeOutSignalInterruptedUnit(currentBasePath),
+    () => {
+      closeOutSignalInterruptedUnit(currentBasePath);
+      try {
+        if (s.workerId) {
+          markWorkerStopping(s.workerId);
+          s.workerId = null;
+        }
+      } catch (err) {
+        logWarning("engine", `signal worker cleanup failed: ${getErrorMessage(err)}`, { file: "auto.ts" });
+      }
+    },
   );
 }
 
@@ -923,7 +960,7 @@ export function checkRemoteAutoSession(projectRoot: string): {
 
   if (!isLockProcessAlive(lock)) {
     // Stale lock from a dead process — not a live remote session
-    markWorkerStoppingByPid(normalizeRealPath(projectRoot), lock.pid);
+    clearLock(projectRoot);
     return { running: false };
   }
 
@@ -1086,6 +1123,7 @@ export async function rerootCommandSession(
 
 export async function cleanupAfterLoopExit(ctx: ExtensionContext): Promise<void> {
   const preserveStepSurface = s.preserveStepSurfaceAfterLoopExit;
+  const preserveCompletionSurface = s.completionStopInProgress;
   const preservePausedSurface = s.paused;
   s.currentUnit = null;
   s.active = false;
@@ -1111,6 +1149,9 @@ export async function cleanupAfterLoopExit(ctx: ExtensionContext): Promise<void>
   if (!s.paused) {
     if (preserveStepSurface) {
       s.preserveStepSurfaceAfterLoopExit = false;
+    } else if (preserveCompletionSurface) {
+      ctx.ui.setStatus("gsd-auto", undefined);
+      s.completionStopInProgress = false;
     } else {
       ctx.ui.setStatus("gsd-auto", undefined);
       ctx.ui.setWidget("gsd-progress", undefined);
@@ -1227,42 +1268,27 @@ export async function stopAuto(
 ): Promise<void> {
   if (!s.active && !s.paused) return;
   const loadedPreferences = loadEffectiveGSDPreferences(s.basePath || undefined)?.preferences;
-  const reasonSuffix = reason ? ` — ${reason}` : "";
-  const preserveCompletionSurface = Boolean(options.completionWidget);
+  const stopNotificationPrefix = formatAutoStopNotificationPrefix(reason);
+  const displayReason = formatAutoStopDisplayReason(reason);
+  const completionStopRequested = Boolean(options.completionWidget);
+  const renderCompletionWidget = completionStopRequested && process.env.GSD_HEADLESS === "1";
+  const preserveCompletionSurface = completionStopRequested;
   s.completionStopInProgress = preserveCompletionSurface;
 
   // #4764 — telemetry: record the exit reason, isolation mode, whether an auto
   // worktree was active, and whether the current milestone was merged before
   // stopAuto. The unmerged-work warning is only meaningful for real worktrees.
   try {
-    const { emitAutoExit } = await import("./worktree-telemetry.js");
-    type AutoExitReason =
-      | "pause" | "stop" | "blocked" | "merge-conflict" | "merge-failed"
-      | "slice-merge-conflict" | "all-complete" | "no-active-milestone" | "other";
+    const { emitAutoExit, normalizeAutoExitReason } = await import("./worktree-telemetry.js");
     // Normalize the free-form reason to a closed set so the telemetry
     // aggregator buckets stably. Raw detail is preserved in the phases.ts
     // notification and the notify'd error string.
     const rawReason = reason ?? "stop";
-    const normalizedReason: AutoExitReason = rawReason.startsWith("Blocked:")
-      ? "blocked"
-      : rawReason.startsWith("Merge conflict")
-        ? "merge-conflict"
-        : rawReason.startsWith("Merge error") || rawReason.startsWith("Merge failed")
-          ? "merge-failed"
-          : rawReason.startsWith("Slice-parallel dispatched")
-            ? "stop"
-          : rawReason.startsWith("slice-merge-conflict")
-            ? "slice-merge-conflict"
-            : rawReason === "All milestones complete"
-              ? "all-complete"
-              : rawReason === "No active milestone"
-                ? "no-active-milestone"
-                : rawReason === "stop" || rawReason === "pause"
-                  ? rawReason
-                  : "other";
+    const normalizedReason = normalizeAutoExitReason(rawReason);
     const telemetryBase = s.originalBasePath || s.basePath;
     emitAutoExit(telemetryBase, {
       reason: normalizedReason,
+      rawReason,
       milestoneId: s.currentMilestoneId ?? undefined,
       milestoneMerged: s.milestoneMergedInPhases === true,
       isolationMode: getIsolationMode(telemetryBase),
@@ -1335,7 +1361,11 @@ export async function stopAuto(
     // Skip if phases.ts already merged this milestone — avoids the double
     // mergeAndExit that fails because the branch was already deleted (#2645).
     try {
-      if (s.currentMilestoneId && !s.milestoneMergedInPhases) {
+      const stopMilestoneId = _resolveStopAutoMilestoneId(
+        s.currentMilestoneId,
+        s.basePath,
+      );
+      if (stopMilestoneId && !s.milestoneMergedInPhases) {
         const notifyCtx = ctx
           ? { notify: ctx.ui.notify.bind(ctx.ui) }
           : { notify: () => {} };
@@ -1352,19 +1382,19 @@ export async function stopAuto(
         let milestoneComplete = false;
         try {
           if (isDbAvailable()) {
-            const dbRow = getMilestone(s.currentMilestoneId);
+            const dbRow = getMilestone(stopMilestoneId);
             milestoneComplete = dbRow?.status === "complete";
           } else {
             const summaryPath = resolveMilestoneFile(
               s.originalBasePath || s.basePath,
-              s.currentMilestoneId,
+              stopMilestoneId,
               "SUMMARY",
             );
             if (!summaryPath) {
               // Also check in the worktree path (SUMMARY may not be synced yet)
               const wtSummaryPath = resolveMilestoneFile(
                 s.basePath,
-                s.currentMilestoneId,
+                stopMilestoneId,
                 "SUMMARY",
               );
               milestoneComplete = wtSummaryPath !== null;
@@ -1378,15 +1408,16 @@ export async function stopAuto(
         }
 
         const exitAction = _selectStopAutoWorktreeExit({
-          currentMilestoneId: s.currentMilestoneId,
+          currentMilestoneId: stopMilestoneId,
           milestoneComplete,
           milestoneMergedInPhases: s.milestoneMergedInPhases,
+          preserveCompletedMilestoneBranch: options.preserveCompletedMilestoneBranch,
         });
 
         if (exitAction === "merge") {
           // Milestone is complete — merge worktree branch back to main
           const r = lifecycle.exitMilestone(
-            s.currentMilestoneId,
+            stopMilestoneId,
             { merge: true },
             notifyCtx,
           );
@@ -1394,7 +1425,7 @@ export async function stopAuto(
         } else if (exitAction === "preserve") {
           // Milestone still in progress — preserve branch for later resumption
           const r = lifecycle.exitMilestone(
-            s.currentMilestoneId,
+            stopMilestoneId,
             { merge: false, preserveBranch: true },
             notifyCtx,
           );
@@ -1477,28 +1508,30 @@ export async function stopAuto(
 
     // ── Step 8: Ledger notification ──
     try {
-      const ledger = getLedger();
-      const isAllComplete = reason === "All milestones complete";
-      const isMilestoneComplete = /^Milestone\s+\S+\s+complete$/i.test(reason ?? "");
-      const notificationPrefix = isAllComplete
-        ? "All milestones complete"
-        : isMilestoneComplete
-          ? `${reason}. Auto-mode finished this milestone`
-          : `Auto-mode stopped${reasonSuffix}`;
-      if (ledger && ledger.units.length > 0) {
-        const totals = getProjectTotals(ledger.units);
-        ctx?.ui.notify(
-          formatAutoStopNotification(notificationPrefix, totals, ledger.units.length),
-          "info",
-        );
-      } else {
-        ctx?.ui.notify(`${notificationPrefix}.`, "info");
+      if (!preserveCompletionSurface) {
+        const ledger = getLedger();
+        const isAllComplete = reason === "All milestones complete";
+        const isMilestoneComplete = /^Milestone\s+\S+\s+complete$/i.test(reason ?? "");
+        const notificationPrefix = isAllComplete
+          ? "All milestones complete"
+          : isMilestoneComplete
+            ? `${reason}. Auto-mode finished this milestone`
+            : stopNotificationPrefix;
+        if (ledger && ledger.units.length > 0) {
+          const totals = getProjectTotals(ledger.units);
+          ctx?.ui.notify(
+            formatAutoStopNotification(notificationPrefix, totals, ledger.units.length),
+            "info",
+          );
+        } else {
+          ctx?.ui.notify(`${notificationPrefix}.`, "info");
+        }
       }
     } catch (e) {
       debugLog("stop-cleanup-ledger", { error: e instanceof Error ? e.message : String(e) });
     }
 
-    if (preserveCompletionSurface && ctx && options.completionWidget) {
+    if (renderCompletionWidget && ctx && options.completionWidget) {
       const ledger = getLedger();
       const units = ledger?.units ?? [];
       const totals = units.length > 0 ? getProjectTotals(units) : null;
@@ -1550,6 +1583,9 @@ export async function stopAuto(
         allMilestonesComplete: options.completionWidget.allMilestonesComplete,
         basePath: s.originalBasePath || s.basePath || null,
       });
+      if (process.env.GSD_HEADLESS === "1") {
+        ctx.ui.notify(`${stopNotificationPrefix}.`, "info");
+      }
     }
 
     // ── Step 9: Cmux sidebar / event log ──
@@ -1557,8 +1593,8 @@ export async function stopAuto(
       pi?.events.emit(CMUX_CHANNELS.SIDEBAR, { action: "clear" as const, preferences: loadedPreferences });
       pi?.events.emit(CMUX_CHANNELS.LOG, {
         preferences: loadedPreferences,
-        message: `Auto-mode stopped${reasonSuffix || ""}.`,
-        level: reason?.startsWith("Blocked:") ? "warning" : "info",
+        message: `${stopNotificationPrefix}.`,
+        level: isBlockedStopReason(reason) ? "warning" : "info",
       });
     } catch (e) {
       debugLog("stop-cleanup-cmux", { error: e instanceof Error ? e.message : String(e) });
@@ -1568,7 +1604,7 @@ export async function stopAuto(
     try {
       if (isDebugEnabled()) {
         const logPath = writeDebugSummary();
-        if (logPath) {
+        if (logPath && !preserveCompletionSurface) {
           ctx?.ui.notify(`Debug log written → ${logPath}`, "info");
         }
       }
@@ -1642,13 +1678,18 @@ export async function stopAuto(
 
     // UI cleanup
     ctx?.ui.setStatus("gsd-auto", undefined);
-    if (!preserveCompletionSurface) {
+    if (renderCompletionWidget) {
+      // Headless callers keep the durable completion widget/notification path.
+    } else if (preserveCompletionSurface) {
       ctx?.ui.setWidget("gsd-progress", undefined);
-      const status = reason?.startsWith("Blocked:") ? "blocked" : reason?.toLowerCase().includes("fail") ? "failed" : "stopped";
+      ctx?.ui.setWidget("gsd-outcome", undefined);
+    } else {
+      ctx?.ui.setWidget("gsd-progress", undefined);
+      const status = isBlockedStopReason(reason) ? "blocked" : reason?.toLowerCase().includes("fail") ? "failed" : "stopped";
       setLifecycleOutcome(ctx, {
         status,
         title: status === "blocked" ? "Auto-mode blocked" : status === "failed" ? "Auto-mode stopped with an issue" : "Auto-mode stopped",
-        detail: reason ?? "Auto-mode stopped.",
+        detail: displayReason || "Auto-mode stopped.",
         nextAction: status === "blocked"
           ? "Fix the blocker, then run /gsd auto to resume."
           : "Run /gsd status for the current project state, or /gsd auto to continue.",
@@ -1678,12 +1719,23 @@ export async function stopAuto(
 
 export type StopAutoWorktreeExitAction = "none" | "merge" | "preserve";
 
+export function _resolveStopAutoMilestoneId(
+  currentMilestoneId: string | null,
+  basePath: string,
+): string | null {
+  if (currentMilestoneId) return currentMilestoneId;
+  const detected = detectWorktreeName(basePath);
+  return detected && MILESTONE_ID_RE.test(detected) ? detected : null;
+}
+
 export function _selectStopAutoWorktreeExit(args: {
   currentMilestoneId: string | null;
   milestoneComplete: boolean;
   milestoneMergedInPhases: boolean;
+  preserveCompletedMilestoneBranch?: boolean;
 }): StopAutoWorktreeExitAction {
   if (!args.currentMilestoneId || args.milestoneMergedInPhases) return "none";
+  if (args.milestoneComplete && args.preserveCompletedMilestoneBranch) return "preserve";
   return args.milestoneComplete ? "merge" : "preserve";
 }
 
@@ -1725,9 +1777,16 @@ export async function pauseAuto(
   // PAUSED_SESSION_KV_KEY) instead of runtime/paused-session.json. The
   // fresh-start bootstrap below reads from the same key.
   try {
+    const pausedWorktreePath = resolvePausedAutoWorktreePath({
+      basePath: s.basePath,
+      originalBasePath: s.originalBasePath,
+      currentMilestoneId: s.currentMilestoneId,
+      isolationMode: getIsolationMode(s.originalBasePath || s.basePath),
+      baseIsAutoWorktree: isInAutoWorktree(s.basePath),
+    });
     const pausedMeta: PausedSessionMetadata = {
       milestoneId: s.currentMilestoneId ?? undefined,
-      worktreePath: isInAutoWorktree(s.basePath) ? s.basePath : null,
+      worktreePath: pausedWorktreePath,
       originalBasePath: s.originalBasePath,
       stepMode: s.stepMode,
       pausedAt: new Date().toISOString(),
@@ -1777,6 +1836,15 @@ export async function pauseAuto(
     clearLock(lockBase());
   }
 
+  if (s.workerId) {
+    try {
+      markWorkerStopping(s.workerId);
+    } catch (err) {
+      logWarning("engine", `pause worker cleanup failed: ${getErrorMessage(err)}`, { file: "auto.ts" });
+    }
+    s.workerId = null;
+  }
+
   deregisterSigtermHandler();
 
   // Unblock pending unitPromise so autoLoop exits cleanly (#1799)
@@ -1807,8 +1875,11 @@ export async function pauseAuto(
     unitLabel: pausedUnitLabel,
   });
   if (ctx) initHealthWidget(ctx);
+  const pauseMessage = _errorContext?.message
+    ? `${s.stepMode ? "Step" : "Auto"}-mode paused: ${_errorContext.message}`
+    : `${s.stepMode ? "Step" : "Auto"}-mode paused (Escape). Type to interact, or ${resumeCmd} to resume.`;
   ctx?.ui.notify(
-    `${s.stepMode ? "Step" : "Auto"}-mode paused (Escape). Type to interact, or ${resumeCmd} to resume.`,
+    pauseMessage,
     "info",
   );
 }
@@ -1872,7 +1943,9 @@ export function createWiredDispatchAdapter(
       const active = state.activeMilestone;
       if (!active) return null;
 
-      const prefs = loadEffectiveGSDPreferences(dispatchBasePath)?.preferences;
+      const activeSession = input.session ?? session;
+      const activeDispatchBasePath = activeSession?.basePath || dispatchBasePath;
+      const prefs = loadEffectiveGSDPreferences(activeDispatchBasePath)?.preferences;
 
       // Derive session-derived dispatch inputs the same way phases.ts:runDispatch does
       // (#5789). Prefer caller-supplied values when present so test harnesses and
@@ -1900,13 +1973,25 @@ export function createWiredDispatchAdapter(
             ? "true"
             : "false");
 
+      const pendingRetry = session?.pendingVerificationRetryDispatch;
+      if (session && pendingRetry) {
+        session.pendingVerificationRetryDispatch = null;
+        session.pendingOrchestrationDispatch = pendingRetry;
+        return {
+          unitType: pendingRetry.unitType,
+          unitId: pendingRetry.unitId,
+          reason: "verification-retry",
+          preconditions: [],
+        };
+      }
+
       const action = await resolveDispatch({
-        basePath: dispatchBasePath,
+        basePath: activeDispatchBasePath,
         mid: active.id,
         midTitle: active.title,
         state,
         prefs,
-        session: input.session ?? session,
+        session: activeSession,
         structuredQuestionsAvailable,
         sessionContextWindow,
         sessionProvider,
@@ -1923,7 +2008,10 @@ export function createWiredDispatchAdapter(
       }
       if (action.action !== "dispatch") {
         if (session) session.pendingOrchestrationDispatch = null;
-        return null;
+        return {
+          kind: "skipped",
+          reason: action.matchedRule ?? "dispatch-skip",
+        };
       }
       if (session) {
         const pending: PendingOrchestrationDispatch = {
@@ -1947,6 +2035,41 @@ export function createWiredDispatchAdapter(
   };
 }
 
+function isUsableLiveOrchestratorBasePath(basePath: string): boolean {
+  if (!basePath || !existsSync(basePath)) return false;
+  if (!detectWorktreeName(basePath)) return true;
+
+  try {
+    return readFileSync(join(basePath, ".git"), "utf8").trim().startsWith("gitdir: ");
+  } catch {
+    return false;
+  }
+}
+
+export function resolveLiveOrchestratorBasePath(input: {
+  capturedBasePath: string;
+  runtimeBasePath: string;
+  sessionBasePath?: string | null;
+  originalBasePath?: string | null;
+}): string {
+  const primary = input.sessionBasePath || input.capturedBasePath;
+  if (isUsableLiveOrchestratorBasePath(primary)) return primary;
+
+  const fallbacks = [
+    input.originalBasePath,
+    input.runtimeBasePath,
+    resolveProjectRoot(input.capturedBasePath),
+  ];
+
+  for (const candidate of fallbacks) {
+    if (candidate && isUsableLiveOrchestratorBasePath(candidate)) {
+      return candidate;
+    }
+  }
+
+  return input.runtimeBasePath || input.capturedBasePath;
+}
+
 /**
  * Thin entry glue for the new Auto Orchestration module.
  *
@@ -1962,11 +2085,19 @@ export function createWiredAutoOrchestrationModule(
 ): AutoOrchestrationModule {
   const flowId = `auto-orchestrator-${Date.now()}`;
   let seq = 0;
+  const getLiveDispatchBasePath = () =>
+    resolveLiveOrchestratorBasePath({
+      capturedBasePath: dispatchBasePath,
+      runtimeBasePath,
+      sessionBasePath: s.basePath,
+      originalBasePath: s.originalBasePath,
+    });
 
   const deps: AutoOrchestratorDeps = {
     stateReconciliation: {
       async reconcileBeforeDispatch() {
-        const result = await reconcileBeforeDispatch(dispatchBasePath);
+        const activeBasePath = getLiveDispatchBasePath();
+        const result = await reconcileBeforeDispatch(activeBasePath);
         if (result.blockers.length > 0) {
           return {
             ok: false,
@@ -2019,21 +2150,54 @@ export function createWiredAutoOrchestrationModule(
           return { ok: true, reason: "isolation-not-worktree" };
         }
         const safety = createWorktreeSafetyModule();
-        const snapshot = await deriveState(dispatchBasePath);
+        const activeBasePath = getLiveDispatchBasePath();
+        const snapshot = await deriveState(activeBasePath);
         const milestoneId = snapshot.activeMilestone?.id ?? null;
         const expectedBranch = milestoneId ? autoWorktreeBranch(milestoneId) : null;
-        const result = safety.validateUnitRoot({
+        let result = safety.validateUnitRoot({
           unitType,
           unitId,
           writeScope,
           projectRoot: runtimeBasePath,
-          unitRoot: dispatchBasePath,
+          unitRoot: activeBasePath,
           milestoneId,
           isolationMode: getIsolationMode(runtimeBasePath),
           expectedBranch,
         });
         if (!result.ok) {
-          return { ok: false, reason: `${result.kind}: ${result.reason}` };
+          const repaired = await repairAutoWorktreeSafetyFailure({
+            safetyResult: result,
+            projectRoot: runtimeBasePath,
+            activeRoot: activeBasePath,
+            milestoneId,
+            enterMilestone: async (id) => {
+              buildLifecycle().adoptSessionRoot(runtimeBasePath, s.originalBasePath || runtimeBasePath);
+              const enterResult = buildLifecycle().enterMilestone(id, {
+                notify: ctx.ui.notify.bind(ctx.ui),
+              });
+              if (!enterResult.ok) return { ok: false, reason: enterResult.reason };
+              rebuildScope(s.basePath, s.currentMilestoneId);
+              return { ok: true };
+            },
+            revalidate: () => safety.validateUnitRoot({
+              unitType,
+              unitId,
+              writeScope,
+              projectRoot: runtimeBasePath,
+              unitRoot: getLiveDispatchBasePath(),
+              milestoneId,
+              isolationMode: getIsolationMode(runtimeBasePath),
+              expectedBranch,
+            }),
+          });
+          result = repaired.result;
+          if (result.ok) {
+            return { ok: true, reason: repaired.repaired ? `repaired-${result.kind}` : result.kind };
+          }
+          const repairDetail = repaired.repairReason
+            ? ` (repair skipped: ${repaired.repairReason})`
+            : "";
+          return { ok: false, reason: `${result.kind}: ${result.reason}${repairDetail}` };
         }
         return { ok: true, reason: result.kind };
       },
@@ -2046,7 +2210,7 @@ export function createWiredAutoOrchestrationModule(
       },
       async preAdvanceGate() {
         try {
-          const gate = await preDispatchHealthGate(dispatchBasePath);
+          const gate = await preDispatchHealthGate(getLiveDispatchBasePath());
           if (gate.proceed) {
             return {
               kind: "pass",
@@ -2129,7 +2293,8 @@ export function createWiredAutoOrchestrationModule(
     },
     uokGate: {
       async emit(input) {
-        const prefs = loadEffectiveGSDPreferences(dispatchBasePath)?.preferences;
+        const activeBasePath = getLiveDispatchBasePath();
+        const prefs = loadEffectiveGSDPreferences(activeBasePath)?.preferences;
         const uokFlags = resolveUokFlags(prefs);
         if (!uokFlags.gates) return;
         const milestoneId = input.milestoneId ?? s.currentMilestoneId ?? undefined;
@@ -2147,7 +2312,7 @@ export function createWiredAutoOrchestrationModule(
             }),
           });
           await runner.run(input.gateId, {
-            basePath: dispatchBasePath,
+            basePath: activeBasePath,
             traceId: `pre-dispatch:${flowId}`,
             turnId: `orch-${seq}`,
             milestoneId,
@@ -2372,6 +2537,20 @@ export async function startAuto(
   // bootstrap-only path; this call ensures the resume path is also protected.
   if (recoverFailedMigration(base)) {
     ctx.ui.notify("Recovered unfinished migration (.gsd.migrating → .gsd).", "info");
+  }
+
+  const unmergedStartMessage = await getUnmergedMilestoneBlockMessageForBase(base, "auto");
+  if (unmergedStartMessage) {
+    ctx.ui.notify(unmergedStartMessage, "warning");
+    debugLog("startAuto", { phase: "unmerged-milestone-blocked", base });
+    return;
+  }
+
+  const blockedStartMessage = await getValidationBlockMessageForBase(base, "auto");
+  if (blockedStartMessage) {
+    ctx.ui.notify(blockedStartMessage, "warning");
+    debugLog("startAuto", { phase: "validation-blocked", base });
+    return;
   }
 
   const freshStartAssessment = await (interruptedAssessment
@@ -2682,8 +2861,8 @@ export async function startAuto(
         "resuming",
         s.currentMilestoneId ?? "unknown",
       );
-      clearPausedSession("paused-session DB cleanup failed (resume activation)");
     }
+    clearPausedSession("paused-session DB cleanup failed (resume activation)");
     pi.events.emit(CMUX_CHANNELS.LOG, { preferences: loadEffectiveGSDPreferences(s.basePath || undefined)?.preferences, message: s.stepMode ? "Step-mode resumed." : "Auto-mode resumed.", level: "progress" });
 
     try {

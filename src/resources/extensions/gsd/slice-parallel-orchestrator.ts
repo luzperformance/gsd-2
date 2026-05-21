@@ -367,7 +367,24 @@ export function restoreSliceState(basePath: string): PersistedSliceState | null 
  * crash followed by a fresh process is detectable. (Issue #4980 HIGH-8)
  */
 export function isSliceParallelActive(basePath?: string): boolean {
-  if (sliceState?.active === true) return true;
+  const hasRunningWorkers = (): boolean => {
+    if (!sliceState) return false;
+    for (const worker of sliceState.workers.values()) {
+      if (worker.state === "running") {
+        if (worker.process) return true;
+        if (isRecoveredSliceWorkerAlive(worker)) return true;
+      }
+    }
+    return false;
+  };
+
+  if (sliceState?.active === true) {
+    if (hasRunningWorkers()) return true;
+    sliceState.active = false;
+    removeSliceStateFile(sliceState.basePath);
+    return false;
+  }
+
   if (!basePath) return false;
   const restored = restoreSliceState(basePath);
   if (!restored || restored.workers.length === 0) return false;
@@ -398,7 +415,11 @@ export function isSliceParallelActive(basePath?: string): boolean {
       cost: w.cost,
     });
   }
-  return true;
+
+  if (hasRunningWorkers()) return true;
+  sliceState.active = false;
+  removeSliceStateFile(sliceState.basePath);
+  return false;
 }
 
 /**

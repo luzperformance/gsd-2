@@ -10,6 +10,7 @@ import {
   closeDatabase,
   _getAdapter,
   insertGateRow,
+  insertAssessment,
   upsertRequirement,
   getAllMilestones,
 } from "../gsd-db.ts";
@@ -438,6 +439,43 @@ test("executeSliceComplete coerces string enrichment entries and writes summary/
   }
 });
 
+test("executeSliceComplete normalizes requirement object aliases (how -> proof/what)", async () => {
+  const base = makeTmpBase();
+  try {
+    openTestDb(base);
+    seedMilestone("M001", "Milestone One");
+    seedSlice("M001", "S01", "pending");
+    writeRoadmap(base, "M001", ["S01"]);
+    const db = _getAdapter();
+    db!.prepare(
+      "INSERT OR REPLACE INTO tasks (milestone_id, slice_id, id, title, status) VALUES (?, ?, ?, ?, ?)",
+    ).run("M001", "S01", "T01", "Task T01", "complete");
+
+    const rawParams = {
+      milestoneId: "M001",
+      sliceId: "S01",
+      sliceTitle: "Slice S01",
+      oneLiner: "Completed slice",
+      narrative: "Implemented the slice",
+      verification: "node --test",
+      uatContent: "## UAT\n\nPASS",
+      requirementsValidated: [{ id: "R010", how: "Integration test passed" }],
+      requirementsInvalidated: [{ id: "R011", how: "Scope narrowed" }],
+    } as unknown as Parameters<typeof executeSliceComplete>[0];
+
+    const result = await inProjectDir(base, () => executeSliceComplete(rawParams, base));
+    assert.equal(result.details.operation, "complete_slice");
+    const summaryPath = String(result.details.summaryPath);
+    assert.ok(existsSync(summaryPath), "slice summary should be written to disk");
+    const summary = readFileSync(summaryPath, "utf-8");
+    assert.match(summary, /R010 — Integration test passed/);
+    assert.match(summary, /R011 — Scope narrowed/);
+  } finally {
+    closeDatabase();
+    cleanup(base);
+  }
+});
+
 test("executeValidateMilestone persists validation artifact and gate records", async () => {
   const base = makeTmpBase();
   try {
@@ -472,6 +510,38 @@ test("executeValidateMilestone persists validation artifact and gate records", a
   }
 });
 
+test("executeValidateMilestone rejects verificationClasses that omit planned Operational class", async () => {
+  const base = makeTmpBase();
+  try {
+    openTestDb(base);
+    seedMilestone("M002", "Milestone Two");
+    const db = _getAdapter();
+    db!.prepare("UPDATE milestones SET verification_operational = ? WHERE id = ?").run(
+      "Camoufox subprocess lifecycle/cleanup proof",
+      "M002",
+    );
+    seedSlice("M002", "S02", "complete");
+
+    const result = await inProjectDir(base, () => executeValidateMilestone({
+      milestoneId: "M002",
+      verdict: "pass",
+      remediationRound: 0,
+      successCriteriaChecklist: "- [x] Works",
+      sliceDeliveryAudit: "| Slice | Result |\n| --- | --- |\n| S02 | pass |",
+      crossSliceIntegration: "No cross-slice issues.",
+      requirementCoverage: "All requirements covered.",
+      verificationClasses: "| Check | Result |\n| --- | --- |\n| Generic verification | PASS |",
+      verdictRationale: "Everything passed.",
+    }, base));
+
+    assert.equal(result.isError, true);
+    assert.match(String(result.details.error), /must include canonical row "Operational"/);
+  } finally {
+    closeDatabase();
+    cleanup(base);
+  }
+});
+
 test("executeCompleteMilestone sanitizes raw params and writes milestone summary", async () => {
   const base = makeTmpBase();
   try {
@@ -483,6 +553,13 @@ test("executeCompleteMilestone sanitizes raw params and writes milestone summary
     db!.prepare(
       "INSERT OR REPLACE INTO tasks (milestone_id, slice_id, id, title, status) VALUES (?, ?, ?, ?, ?)",
     ).run("M003", "S03", "T03", "Task T03", "complete");
+    insertAssessment({
+      path: join(".gsd", "milestones", "M003", "M003-VALIDATION.md"),
+      milestoneId: "M003",
+      status: "pass",
+      scope: "milestone-validation",
+      fullContent: "---\nverdict: pass\nremediation_round: 0\n---\n\n# Validation\nValidated.",
+    });
 
     const rawParams = {
       milestoneId: "M003",

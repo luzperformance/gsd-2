@@ -13,6 +13,7 @@ import {
   _buildSliceWorkerEnvForTest,
   _resolveSliceParallelMaxWorkersForTest,
   getSliceOrchestratorState,
+  isSliceParallelActive,
   restoreSliceState,
   resetSliceOrchestrator,
   SLICE_WORKER_AUTO_ARGS,
@@ -233,6 +234,45 @@ describe("slice-parallel-orchestrator recovery identity", () => {
       assert.equal(restored.workers[0].pid, child.pid);
     } finally {
       child.kill("SIGTERM");
+      rmSync(basePath, { recursive: true, force: true });
+    }
+  });
+
+  it("treats persisted non-running workers as inactive and clears stale state file", () => {
+    const basePath = makeTempProject();
+    try {
+      writeFileSync(
+        join(basePath, ".gsd", "slice-orchestrator.json"),
+        JSON.stringify({
+          active: true,
+          workers: [{
+            milestoneId: "M900",
+            sliceId: "S01",
+            pid: 0,
+            workerToken: "done-worker",
+            processStartFingerprint: null,
+            worktreePath: join(basePath, ".gsd", "worktrees", "M900-S01"),
+            startedAt: Date.now(),
+            state: "stopped",
+            completedUnits: 1,
+            cost: 0,
+          }],
+          totalCost: 0,
+          maxWorkers: 1,
+          startedAt: Date.now(),
+          basePath,
+        }),
+        "utf-8",
+      );
+
+      assert.equal(isSliceParallelActive(basePath), false);
+      assert.equal(
+        existsSync(join(basePath, ".gsd", "slice-orchestrator.json")),
+        false,
+        "stale non-running persisted state should be removed",
+      );
+    } finally {
+      resetSliceOrchestrator();
       rmSync(basePath, { recursive: true, force: true });
     }
   });

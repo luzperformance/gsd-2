@@ -841,8 +841,8 @@ export function _enterMilestoneCore(
 /**
  * Resolve the basePath to adopt on resume from a paused session.
  *
- * Returns `persistedWorktreePath` when the path is non-null and exists on
- * disk; otherwise falls back to `base`. Used by
+ * Returns `persistedWorktreePath` when the path is non-null and still points
+ * at a git worktree; otherwise falls back to `base`. Used by
  * `WorktreeLifecycle.resumeFromPausedSession` (#5621). Exported as a pure
  * function so unit tests can exercise the path-resolution logic without
  * constructing a `WorktreeLifecycle` instance.
@@ -855,9 +855,26 @@ export function resolvePausedResumeBasePath(
   persistedWorktreePath: string | null | undefined,
   pathExists: (p: string) => boolean = existsSync,
 ): string {
-  return persistedWorktreePath && pathExists(persistedWorktreePath)
+  return persistedWorktreePath &&
+    isValidPersistedWorktreePath(persistedWorktreePath, pathExists)
     ? persistedWorktreePath
     : base;
+}
+
+function isValidPersistedWorktreePath(
+  persistedWorktreePath: string,
+  pathExists: (p: string) => boolean,
+): boolean {
+  if (!pathExists(persistedWorktreePath)) return false;
+
+  const gitPath = join(persistedWorktreePath, ".git");
+  if (!pathExists(gitPath)) return false;
+
+  try {
+    return readFileSync(gitPath, "utf8").trim().startsWith("gitdir: ");
+  } catch {
+    return false;
+  }
 }
 
 function rebuildGitService(
@@ -1236,6 +1253,11 @@ export function mergeMilestoneStandalone(
 ): MergeStandaloneResult {
   const { originalBasePath, worktreeBasePath, milestoneId, notify } = mctx;
   validateMilestoneId(milestoneId);
+  if (!originalBasePath && !worktreeBasePath) {
+    throw new Error(
+      `Internal error: mergeMilestoneStandalone(${milestoneId}) requires originalBasePath or worktreeBasePath.`,
+    );
+  }
 
   if (mctx.isolationDegraded) {
     if (originalBasePath) {

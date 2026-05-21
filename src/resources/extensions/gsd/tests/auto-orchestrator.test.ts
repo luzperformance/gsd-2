@@ -3,11 +3,14 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { createAutoOrchestrator, STUCK_WINDOW_SIZE } from "../auto/orchestrator.js";
 import type { AutoOrchestratorDeps } from "../auto/contracts.js";
 import type { GSDState } from "../types.js";
-import { createWiredDispatchAdapter } from "../auto.js";
+import { createWiredDispatchAdapter, resolveLiveOrchestratorBasePath } from "../auto.js";
 import { resolveDispatch, type DispatchContext } from "../auto-dispatch.js";
 import { RuleRegistry, setRegistry, resetRegistry } from "../rule-registry.js";
 import type { UnifiedRule } from "../rule-types.js";
@@ -388,6 +391,52 @@ test("advance() stops when dispatch has no next unit", async () => {
   assert.equal(orchestrator.getStatus().phase, "stopped");
 });
 
+test("advance() reports completion when complete state has no next unit", async () => {
+  const completeState: GSDState = {
+    ...makeState(),
+    activeMilestone: null,
+    phase: "complete",
+    lastCompletedMilestone: { id: "M001", title: "Milestone" },
+    nextAction: "All milestones complete.",
+  };
+  const { deps } = makeDeps({
+    stateReconciliation: {
+      async reconcileBeforeDispatch() {
+        return { ok: true, stateSnapshot: completeState };
+      },
+    },
+    dispatch: {
+      async decideNextUnit() { return null; },
+    },
+  });
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const result = await orchestrator.advance();
+
+  assert.equal(result.kind, "stopped");
+  assert.equal(result.reason, "all milestones complete");
+});
+
+test("advance() keeps running when dispatch intentionally skips a phase", async () => {
+  const { deps, calls } = makeDeps({
+    dispatch: {
+      async decideNextUnit() {
+        return { kind: "skipped", reason: "evaluating-gates skipped after marking gates omitted" };
+      },
+    },
+  });
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const result = await orchestrator.advance();
+
+  assert.equal(result.kind, "skipped");
+  if (result.kind !== "skipped") return;
+  assert.equal(result.reason, "evaluating-gates skipped after marking gates omitted");
+  assert.equal(orchestrator.getStatus().phase, "running");
+  assert.ok(calls.includes("journal:advance-skipped"));
+  assert.ok(!calls.includes("journal:advance-stopped"));
+});
+
 test("advance() surfaces dispatch blocker reason instead of generic no remaining units", async () => {
   const { deps, calls } = makeDeps({
     dispatch: {
@@ -459,6 +508,70 @@ test("advance() is idempotent for the same active unit", async () => {
 
   const prepareCalls = calls.filter((c) => c === "worktree.prepare").length;
   assert.equal(prepareCalls, 1);
+});
+
+test("completeActiveUnit clears in-flight idempotency and stops stale same-unit advance", async () => {
+  const { deps, calls } = makeDeps();
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const first = await orchestrator.advance();
+  assert.equal(first.kind, "advanced");
+  if (first.kind !== "advanced") throw new Error("expected first advance");
+
+  await orchestrator.completeActiveUnit(first.unit);
+  const second = await orchestrator.advance();
+
+  assert.equal(orchestrator.getStatus().activeUnit, undefined);
+  assert.equal(second.kind, "blocked");
+  if (second.kind !== "blocked") throw new Error("expected stale same-unit block");
+  assert.equal(second.action, "stop");
+  assert.equal(second.reason, "state did not advance after finalized execute-task T01");
+  assert.ok(calls.includes("journal:unit-finalized"));
+  const prepareCalls = calls.filter((c) => c === "worktree.prepare").length;
+  assert.equal(prepareCalls, 1, "stale same-unit advance must not prepare or redispatch");
+});
+
+test("completeActiveUnit allows a different next unit to advance", async () => {
+  let nextTaskId = "T01";
+  const { deps } = makeDeps({
+    dispatch: {
+      async decideNextUnit() {
+        return { unitType: "execute-task", unitId: nextTaskId, reason: "ready", preconditions: [] };
+      },
+    },
+  });
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const first = await orchestrator.advance();
+  assert.equal(first.kind, "advanced");
+  if (first.kind !== "advanced") throw new Error("expected first advance");
+
+  await orchestrator.completeActiveUnit(first.unit);
+  nextTaskId = "T02";
+  const second = await orchestrator.advance();
+
+  assert.equal(second.kind, "advanced");
+  if (second.kind !== "advanced") throw new Error("expected second advance");
+  assert.deepEqual(second.unit, { unitType: "execute-task", unitId: "T02" });
+});
+
+test("retryActiveUnit clears in-flight idempotency without marking the unit finalized", async () => {
+  const { deps, calls } = makeDeps();
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const first = await orchestrator.advance();
+  assert.equal(first.kind, "advanced");
+  if (first.kind !== "advanced") throw new Error("expected first advance");
+
+  await orchestrator.retryActiveUnit(first.unit);
+  const second = await orchestrator.advance();
+
+  assert.equal(second.kind, "advanced");
+  if (second.kind !== "advanced") throw new Error("expected retry advance");
+  assert.deepEqual(second.unit, first.unit);
+  assert.ok(calls.includes("journal:unit-retry"));
+  const prepareCalls = calls.filter((c) => c === "worktree.prepare").length;
+  assert.equal(prepareCalls, 2, "retry should intentionally redispatch the same unit");
 });
 
 test("resume() re-enters running phase", async () => {
@@ -841,6 +954,41 @@ test("stuck-loop: journal records the stuck-loop reason on advance-blocked", asy
   assert.ok(calls.includes("journal:advance-blocked"));
 });
 
+// ─── closeout regression: wired orchestrator must not dispatch from a removed worktree ───
+
+test("wired orchestrator base resolver prefers live project root after worktree cleanup", (t) => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "gsd-orch-root-"));
+  const staleWorktreeRoot = join(projectRoot, ".gsd", "worktrees", "M002");
+  mkdirSync(join(staleWorktreeRoot, ".bg-shell"), { recursive: true });
+  t.after(() => { try { rmSync(projectRoot, { recursive: true, force: true }); } catch { /* */ } });
+
+  assert.equal(
+    resolveLiveOrchestratorBasePath({
+      capturedBasePath: staleWorktreeRoot,
+      runtimeBasePath: projectRoot,
+      sessionBasePath: projectRoot,
+      originalBasePath: projectRoot,
+    }),
+    projectRoot,
+  );
+});
+
+test("wired orchestrator base resolver keeps a captured active git worktree", (t) => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "gsd-orch-worktree-"));
+  const worktreeRoot = join(projectRoot, ".gsd", "worktrees", "M003");
+  mkdirSync(worktreeRoot, { recursive: true });
+  writeFileSync(join(worktreeRoot, ".git"), "gitdir: /tmp/gsd-orch-worktree/.git/worktrees/M003\n");
+  t.after(() => { try { rmSync(projectRoot, { recursive: true, force: true }); } catch { /* */ } });
+
+  assert.equal(
+    resolveLiveOrchestratorBasePath({
+      capturedBasePath: worktreeRoot,
+      runtimeBasePath: projectRoot,
+    }),
+    worktreeRoot,
+  );
+});
+
 // ─── #5789 parity: wired dispatch adapter mirrors runDispatch's resolveDispatch call ───
 
 test("wired DispatchAdapter forwards session-derived dispatch inputs identically to runDispatch", async () => {
@@ -1011,6 +1159,7 @@ test("wired DispatchAdapter prefers caller-supplied dispatch inputs over ctx-der
     assert.equal(captured[0].sessionProvider, "openai");
     assert.equal(captured[0].modelRegistry, overrideModelRegistry);
     assert.equal(captured[0].session, session);
+    assert.equal(captured[0].basePath, "/tmp/session-fixture");
   } finally {
     resetRegistry();
   }
@@ -1051,9 +1200,41 @@ test("wired DispatchAdapter forwards constructor session when advance input omit
     assert.ok(result);
     assert.equal(captured.length, 1, "expected one captured dispatch context");
     assert.equal(captured[0].session, session);
+    assert.equal(captured[0].basePath, "/tmp/worktree-fixture");
   } finally {
     resetRegistry();
   }
+});
+
+test("wired DispatchAdapter replays pending verification retry dispatch", async () => {
+  const stateSnapshot = makeState();
+  const ctx = { model: {}, modelRegistry: { getAll: () => [] } } as any;
+  const pi = { getActiveTools: () => [] } as any;
+  const session = {
+    basePath: "/tmp/worktree-fixture",
+    pendingOrchestrationDispatch: null,
+    pendingVerificationRetryDispatch: {
+      unitType: "complete-slice",
+      unitId: "M004/S01",
+      prompt: "repair slice closeout",
+      pauseAfterUatDispatch: false,
+      state: stateSnapshot,
+      mid: "M004",
+      midTitle: "Milestone 4",
+    },
+  } as any;
+  const adapter = createWiredDispatchAdapter(ctx, pi, "/tmp/project-fixture", session);
+
+  const result = await adapter.decideNextUnit({ stateSnapshot });
+
+  assert.ok(result);
+  if (!("unitType" in result)) assert.fail("expected dispatch decision");
+  assert.equal(result.unitType, "complete-slice");
+  assert.equal(result.unitId, "M004/S01");
+  assert.equal(result.reason, "verification-retry");
+  assert.equal(session.pendingVerificationRetryDispatch, null);
+  assert.equal(session.pendingOrchestrationDispatch?.prompt, "repair slice closeout");
+  assert.equal(session.pendingOrchestrationDispatch?.state, stateSnapshot);
 });
 
 test("wired DispatchAdapter preserves stop reason as a blocked decision", async () => {
@@ -1082,6 +1263,36 @@ test("wired DispatchAdapter preserves stop reason as a blocked decision", async 
       kind: "blocked",
       reason: "remediation blocker",
       action: "pause",
+    });
+  } finally {
+    resetRegistry();
+  }
+});
+
+test("wired DispatchAdapter preserves dispatch skip instead of collapsing it to no remaining units", async () => {
+  const stateSnapshot = makeState();
+  const skipRule: UnifiedRule = {
+    name: "test-skip-gate",
+    when: "dispatch",
+    evaluation: "first-match",
+    where: async () => ({
+      action: "skip" as const,
+      matchedRule: "evaluating-gates -> omitted",
+    }),
+    then: (r: unknown) => r,
+  };
+  setRegistry(new RuleRegistry([skipRule]));
+
+  try {
+    const ctx = { model: {}, modelRegistry: { getAll: () => [] } } as any;
+    const pi = { getActiveTools: () => [] } as any;
+    const adapter = createWiredDispatchAdapter(ctx, pi, "/tmp/parity-fixture");
+
+    const result = await adapter.decideNextUnit({ stateSnapshot });
+
+    assert.deepEqual(result, {
+      kind: "skipped",
+      reason: "evaluating-gates -> omitted",
     });
   } finally {
     resetRegistry();

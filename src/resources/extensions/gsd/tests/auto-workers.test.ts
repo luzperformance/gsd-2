@@ -16,6 +16,7 @@ import {
   markWorkerStoppingByPid,
   getActiveAutoWorkers,
   getAutoWorker,
+  findStaleWorkerForProject,
 } from "../db/auto-workers.ts";
 
 function makeBase(): string {
@@ -115,4 +116,19 @@ test("getActiveAutoWorkers filters by status and TTL", (t) => {
   const after = getActiveAutoWorkers();
   assert.equal(after.length, 1);
   assert.equal(after[0].worker_id, b);
+});
+
+test("findStaleWorkerForProject returns dead PID immediately even before heartbeat TTL", (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+  openDatabase(join(base, ".gsd", "gsd.db"));
+
+  const id = registerAutoWorker({ projectRootRealpath: base });
+  _getAdapter()!.prepare(
+    `UPDATE workers SET pid = -1 WHERE worker_id = :worker_id`,
+  ).run({ ":worker_id": id });
+
+  const stale = findStaleWorkerForProject(base);
+  assert.ok(stale, "dead pid should be detected as stale immediately");
+  assert.equal(stale!.worker_id, id);
 });

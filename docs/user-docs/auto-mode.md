@@ -28,6 +28,8 @@ When progressive planning is enabled, GSD fully plans the first slice and may le
 
 Milestone completion is safe to retry. If a `complete-milestone` unit is redispatched after the database already marks the milestone as closed, GSD treats the call as successful instead of returning an error. The existing summary projection is left intact, no duplicate completion event is appended, and the tool response includes `alreadyComplete: true` in its details so operators and integrations can distinguish a retry from the first completion.
 
+`complete-milestone` now also enforces a hard validation prerequisite: the latest `milestone-validation` assessment for that milestone must exist and have verdict `pass`. If the verdict is `fail`, `partial`, or absent, closeout is blocked until `validate-milestone` records a fresh passing verdict.
+
 ### Planning-Only Milestone Closeout
 
 When milestone history contains only `.gsd/` artifact changes (for example planning-only or documentation-only closeout), auto mode now continues `complete-milestone` dispatch instead of blocking completion for missing implementation files outside `.gsd/`. GSD emits a warning so operators can distinguish this path from implementation-bearing milestones.
@@ -102,6 +104,8 @@ Common block reasons and operator actions:
 | `missing-closeout-tool` | A closeout unit such as task, slice, milestone, UAT, or gate completion has no required workflow tool available. | Restore the missing `gsd_*` workflow tool registration or update the unit manifest/tool contract so the unit can durably save its result. |
 | `root-missing` / `root-not-directory` | A source-writing unit would run from a missing or invalid unit root. | Recreate or repair the milestone worktree/root, or clear an incorrect `GSD_UNIT_ROOT`, before launching another source-writing unit. |
 | `git-metadata-missing` | A source-writing unit root exists but is not a git worktree or repository root. | Run the unit from the project root or milestone worktree with valid `.git` metadata; recreate the worktree if it was deleted or partially copied. |
+| `preflight-unmerged-conflicts` | Milestone merge preflight found unresolved Git conflict stages in the working tree. | Resolve conflicts manually (`git status`, fix files, stage resolutions), then run `/gsd auto` to resume. |
+| `preflight-dirty-overlap` | Milestone merge preflight found local dirty files that overlap files changed by the milestone branch. | Commit or stash your local edits manually, or move them out of the way, then rerun `/gsd auto`. |
 
 Recovery classification now treats deterministic policy, tool-schema, stale-worker, and invalid-worktree failures as non-transient stops. Provider failures still use provider-specific transient classification and may retry automatically, while verification drift and unknown runtime failures escalate for inspection because repeating the same dispatch can preserve the drift.
 
@@ -126,7 +130,7 @@ Context Mode is enabled by default for auto-mode runs. Eligible auto-mode units 
 
 `contextMode: triage` is used specifically for capture triage turns so they stay focused on classification and routing decisions instead of implementation work.
 
-`gsd_exec` writes capped stdout/stderr and metadata under `.gsd/exec/`; output may be truncated. It then returns only a short digest to the agent. This keeps large command output out of the LLM context while preserving exact evidence on disk. To opt out of Context Mode guidance, snapshot injection, `gsd_exec`, `gsd_exec_search`, and `gsd_resume`, set:
+`gsd_exec` writes capped stdout/stderr and metadata under `.gsd/exec/`; output may be truncated. It then returns only a short digest to the agent. This keeps large command output out of the LLM context while preserving exact evidence on disk. In milestone worktree mode, `gsd_exec` also rejects scripts that target the original project root (including traversal patterns such as `cd ../../..`) so execution stays inside the active worktree boundary. To opt out of Context Mode guidance, snapshot injection, `gsd_exec`, `gsd_exec_search`, and `gsd_resume`, set:
 
 ```yaml
 context_mode:
@@ -208,7 +212,11 @@ Artifact verification retries are capped at 3 attempts. If the expected artifact
 - **Metrics analysis** — cost, token counts, and execution time breakdowns
 - **Doctor integration** — includes structural health issues from `/gsd doctor`
 - **Journal correlation** — uses `.gsd/journal/` events such as `unit-start`, `unit-end`, `post-unit-finalize-start`, `post-unit-finalize-end`, and `iteration-end` to show where the loop stopped
+- **Worktree exit telemetry contract** — `auto-exit` journal events now include a normalized `reason` bucket plus `rawReason` (original free-form text) for operator debugging and analytics stability
 - **LLM-guided investigation** — an agent session with full tool access to investigate root causes
+
+Normalized `auto-exit` reason buckets are:
+`pause`, `stop`, `blocked`, `merge-conflict`, `merge-failed`, `slice-merge-conflict`, `provider-error`, `session-failed`, `stream-aborted`, `unit-aborted`, `verification-exhausted`, `all-complete`, `no-active-milestone`, `other`.
 
 ```
 /gsd forensics [optional problem description]

@@ -267,6 +267,18 @@ export function findStaleWorkerForProject(
   const db = _getAdapter()!;
   const cutoffMs = Date.now() - HEARTBEAT_TTL_SECONDS * 1000;
   const cutoffIso = new Date(cutoffMs).toISOString();
+
+  const latestActiveRow = db.prepare(
+    `SELECT worker_id, host, pid, started_at, version,
+            last_heartbeat_at, status, project_root_realpath
+     FROM workers
+     WHERE project_root_realpath = :project_root
+       AND status = 'active'
+     ORDER BY started_at DESC
+     LIMIT 1`,
+  ).get({ ":project_root": projectRootRealpath }) as AutoWorkerRow | undefined;
+  if (latestActiveRow && !isWorkerProcessAlive(latestActiveRow)) return latestActiveRow;
+
   const row = db.prepare(
     `SELECT worker_id, host, pid, started_at, version,
             last_heartbeat_at, status, project_root_realpath

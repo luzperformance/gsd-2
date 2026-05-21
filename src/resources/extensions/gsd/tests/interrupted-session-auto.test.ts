@@ -209,19 +209,29 @@ test("direct /gsd auto skips paused-session replay when recovered unit already c
 
     const state = {
       pausedSessionFile: join(base, ".gsd", "activity", "paused-session.jsonl"),
-      currentUnit: { type: "plan-slice", id: "M001/S01" },
-      pausedUnitType: null,
-      pausedUnitId: null,
-      pendingCrashRecovery: null,
+      currentUnit: null,
+      pausedUnitType: "plan-slice",
+      pausedUnitId: "M001/S01",
+      pendingCrashRecovery: "stale-recovery-prompt",
     };
 
     const result = _handlePausedSessionResumeRecoveryForTest(base, state);
     assert.equal(result.skippedReplay, true);
     assert.equal(state.pausedSessionFile, null);
     assert.equal(state.pendingCrashRecovery, null);
+    assert.equal(state.pausedUnitType, null);
+    assert.equal(state.pausedUnitId, null);
   } finally {
     cleanup(base);
   }
+});
+
+test("interrupted-session source preserves raw lock and excludes same-pid from running classification", async () => {
+  const source = await import(`node:fs/promises`).then((fs) =>
+    fs.readFile(new URL("../interrupted-session.ts", import.meta.url), "utf-8")
+  );
+  assert.ok(source.includes('const lock = readCrashLock(basePath);'));
+  assert.ok(source.includes('if (lock && lock.pid !== process.pid && isLockProcessAlive(lock)) {'));
 });
 
 test("auto module imports successfully after interrupted-session changes", async () => {

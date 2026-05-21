@@ -1,3 +1,5 @@
+// Project/App: GSD-2
+// File Purpose: Verifies auto-mode artifacts and manages recovery placeholders.
 /**
  * Auto-mode Recovery — artifact resolution, verification, blocker placeholders,
  * skip artifacts, merge state reconciliation,
@@ -48,6 +50,7 @@ import { hasVerdict } from "./verdict-parser.js";
 import { validateArtifact } from "./schemas/validate.js";
 import { getProjectResearchStatus } from "./project-research-policy.js";
 import { isGsdWorktreePath } from "./worktree-root.js";
+import { resolveCanonicalMilestoneRoot } from "./worktree-manager.js";
 
 // Re-export so existing consumers of auto-recovery.ts keep working.
 export { resolveExpectedArtifactPath, diagnoseExpectedArtifact };
@@ -79,6 +82,12 @@ export function diagnoseWorktreeIntegrityFailure(basePath: string): string | nul
   } catch (err) {
     return `Worktree integrity failure: ${basePath} is not a valid git worktree (git rev-parse failed: ${getErrorMessage(err).split("\n")[0]}). Repair or recreate the worktree before retrying.`;
   }
+}
+
+function resolveArtifactVerificationBase(unitId: string, base: string): string {
+  const { milestone } = parseUnitId(unitId);
+  if (!MILESTONE_ID_RE.test(milestone)) return base;
+  return resolveCanonicalMilestoneRoot(base, milestone);
 }
 
 export type ArtifactRecoveryDbRefreshResult =
@@ -224,6 +233,7 @@ export function hasImplementationArtifacts(basePath: string, milestoneId?: strin
         const milestoneEvidence = getChangedFilesFromMilestoneEvidence(basePath, milestoneId);
         if (!milestoneEvidence.ok) return "unknown";
         if (milestoneEvidence.matched) return classifyImplementationFiles(milestoneEvidence.files);
+        return "unknown";
       }
       if (currentBranch && currentBranch !== "HEAD") return "absent";
       return "unknown";
@@ -803,7 +813,8 @@ export function verifyExpectedArtifact(
     }
   }
 
-  const absPath = resolveExpectedArtifactPath(unitType, unitId, base);
+  const artifactBase = resolveArtifactVerificationBase(unitId, base);
+  const absPath = resolveExpectedArtifactPath(unitType, unitId, artifactBase);
   // For unit types with no verifiable artifact (null path), the parent directory
   // is missing on disk — treat as stale completion state so the key gets evicted (#313).
   if (!absPath) {
@@ -811,7 +822,7 @@ export function verifyExpectedArtifact(
     return false;
   }
   if (!existsSync(absPath)) {
-    const worktreeFailure = diagnoseWorktreeIntegrityFailure(base);
+    const worktreeFailure = diagnoseWorktreeIntegrityFailure(artifactBase);
     if (worktreeFailure) {
       logError("recovery", `${worktreeFailure} Unit: ${unitType} ${unitId}.`);
       return false;
@@ -880,9 +891,9 @@ export function verifyExpectedArtifact(
         }
 
         if (taskIds && taskIds.length > 0) {
-          const tasksDir = resolveTasksDir(base, mid, sid);
-          if (!tasksDir) {
-            logWarning("recovery", `verify-fail ${unitType} ${unitId}: resolveTasksDir returned null for ${mid}/${sid}`);
+          const tasksDir = join(dirname(absPath), "tasks");
+          if (!existsSync(tasksDir)) {
+            logWarning("recovery", `verify-fail ${unitType} ${unitId}: tasks dir missing at ${tasksDir}`);
             return false;
           }
           for (const tid of taskIds) {
@@ -989,7 +1000,8 @@ export function writeBlockerPlaceholder(
   base: string,
   reason: string,
 ): string | null {
-  const absPath = resolveExpectedArtifactPath(unitType, unitId, base);
+  const artifactBase = resolveArtifactVerificationBase(unitId, base);
+  const absPath = resolveExpectedArtifactPath(unitType, unitId, artifactBase);
   if (!absPath) return null;
   const dir = dirname(absPath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -1025,7 +1037,7 @@ export function writeBlockerPlaceholder(
     if (unitType === "execute-task" && mid && sid && tid) {
       try {
         updateTaskStatus(mid, sid, tid, "complete", ts);
-        const planPath = resolveSliceFile(base, mid, sid, "PLAN");
+        const planPath = resolveExpectedArtifactPath("plan-slice", `${mid}/${sid}`, artifactBase);
         if (planPath && existsSync(planPath)) {
           const planContent = readFileSync(planPath, "utf-8");
           const updatedPlan = planContent.replace(
@@ -1087,7 +1099,7 @@ export function buildLoopRemediationSteps(
     case "execute-task": {
       if (!mid || !sid || !tid) break;
       return [
-        `   1. Run \`gsd undo-task ${tid}\` to reset the task state`,
+        `   1. Run \`gsd undo-task ${mid}/${sid}/${tid}\` to reset the task state`,
         `   2. Resume auto-mode — it will re-execute the task`,
         `   3. If the task keeps failing, run \`gsd recover\` to rebuild DB state from disk`,
       ].join("\n");
@@ -1108,7 +1120,7 @@ export function buildLoopRemediationSteps(
     case "complete-slice": {
       if (!mid || !sid) break;
       return [
-        `   1. Run \`gsd reset-slice ${sid}\` to reset the slice and all its tasks`,
+        `   1. Run \`gsd reset-slice ${mid}/${sid}\` to reset the slice and all its tasks`,
         `   2. Resume auto-mode — it will re-execute incomplete tasks and re-complete the slice`,
         `   3. If the slice keeps failing, run \`gsd recover\` to rebuild DB state from disk`,
       ].join("\n");

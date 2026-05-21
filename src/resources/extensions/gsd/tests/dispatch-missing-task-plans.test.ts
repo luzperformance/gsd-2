@@ -192,6 +192,33 @@ test("dispatch: active session worktree task plan wins over missing original-roo
     `unitId should be M004/S02/T01, got: ${result.action === "dispatch" ? result.unitId : "(stop)"}`);
 });
 
+test("dispatch: artifact checks trust active session basePath even when originalBasePath matches", async (t) => {
+  const tmp = mkdtempSync(join(tmpdir(), "gsd-worktree-session-basepath-"));
+  t.after(() => rmSync(tmp, { recursive: true, force: true }));
+
+  scaffoldMilestoneContext(tmp, "M004");
+  scaffoldSlicePlan(tmp, "M004", "S02");
+
+  const activeMilestoneRoot = join(tmp, ".gsd", "runtime-active", "M004");
+  mkdirSync(activeMilestoneRoot, { recursive: true });
+  scaffoldMilestoneContext(activeMilestoneRoot, "M004");
+  scaffoldSlicePlan(activeMilestoneRoot, "M004", "S02");
+  scaffoldTaskPlan(activeMilestoneRoot, "M004", "S02", "T01");
+
+  const ctx = makeContextFor(tmp, "M004", "S02", "T01", {
+    basePath: activeMilestoneRoot,
+    originalBasePath: activeMilestoneRoot,
+    currentMilestoneId: "M004",
+  });
+  const result = await resolveDispatch(ctx);
+
+  assert.equal(result.action, "dispatch");
+  assert.ok(result.action === "dispatch" && result.unitType === "execute-task",
+    `unitType should be execute-task, got: ${result.action === "dispatch" ? result.unitType : "(stop)"}`);
+  assert.ok(result.action === "dispatch" && result.unitId === "M004/S02/T01",
+    `unitId should be M004/S02/T01, got: ${result.action === "dispatch" ? result.unitId : "(stop)"}`);
+});
+
 test("dispatch: plan-slice recovery loop — second call after plan-slice still recovers cleanly", async (t) => {
   // Simulate: plan-slice ran but T01-PLAN.md is still missing (e.g. agent crashed mid-write).
   // Dispatch should still re-dispatch plan-slice, not hard-stop.
@@ -244,7 +271,9 @@ test("dispatch: missing task plan recovery logs root/worktree diagnostic when de
   assert.ok(entry, "diagnostic event should be logged when recovery fires in debug mode");
   assert.equal(entry!.basePathUsedForArtifactChecks, tmp);
   assert.equal(entry!.artifactExists, false, "task plan is genuinely absent");
+  assert.equal(entry!.expectedTaskPlanExists, false, "expected task plan is genuinely absent");
   assert.equal(entry!.projectionArtifactExists, false, "projection task plan is genuinely absent");
+  assert.equal(entry!.hasRootWorktreeMismatch, false, "root/worktree mismatch should be false in single-root scenario");
   assert.equal(typeof entry!.expectedTaskPlanPath, "string");
   assert.equal(typeof entry!.projectionTaskPlanPath, "string");
 });

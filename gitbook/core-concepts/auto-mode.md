@@ -280,4 +280,6 @@ Two anomaly types surface from telemetry:
 - `worktree-orphan` — one per orphan reason-bucket
 - `worktree-unmerged-exit` — aggregate signal across the window
 
-For per-event detail (specific milestone IDs, timestamps, exit reasons) inspect `.gsd/journal/*.jsonl` directly.
+For per-event detail (specific milestone IDs, timestamps, exit reasons) inspect `.gsd/journal/*.jsonl` directly. `auto-exit` events now include:
+- `reason`: normalized bucket for stable analytics (`pause`, `stop`, `blocked`, `merge-conflict`, `merge-failed`, `slice-merge-conflict`, `provider-error`, `session-failed`, `stream-aborted`, `unit-aborted`, `verification-exhausted`, `all-complete`, `no-active-milestone`, `other`)
+- `rawReason`: original free-form reason text before normalization, preserved for debugging and audit trails
