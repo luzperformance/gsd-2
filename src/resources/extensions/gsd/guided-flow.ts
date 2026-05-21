@@ -116,6 +116,10 @@ import {
 
 export { resolveGuidedExecuteLaunchMode } from "./smart-entry-routing.js";
 
+export interface HeadlessMilestoneCreationOptions {
+  startAutoAfterReady?: boolean;
+}
+
 type AutoStartOptions = Parameters<typeof startAutoDetached>[4];
 type AutoStartLauncher = typeof startAutoDetached;
 
@@ -694,7 +698,9 @@ export function checkAutoStartAfterDiscuss(lookupBasePath?: string): boolean {
 
   deletePendingAutoStart(basePath);
   ctx.ui.notify(`Milestone ${milestoneId} ready.`, "success");
-  scheduleAutoStartAfterIdle(ctx, pi, basePath, false, { step });
+  if (entry.startAuto !== false) {
+    scheduleAutoStartAfterIdle(ctx, pi, basePath, false, { step });
+  }
   return true;
 }
 
@@ -1311,6 +1317,7 @@ export async function showHeadlessMilestoneCreation(
   pi: ExtensionAPI,
   basePath: string,
   seedContext: string,
+  options: HeadlessMilestoneCreationOptions = {},
 ): Promise<void> {
   // Clear stale reservations from previous cancelled sessions (#2488)
   clearReservedMilestoneIds();
@@ -1335,8 +1342,15 @@ export async function showHeadlessMilestoneCreation(
   // Build and dispatch the headless discuss prompt
   const prompt = buildHeadlessDiscussPrompt(nextId, seedContext, basePath);
 
-  // Set pending auto start (auto-mode triggers on "Milestone X ready." via checkAutoStartAfterDiscuss)
-  setPendingAutoStart(basePath, { ctx, pi, basePath, milestoneId: nextId });
+  // Set the ready handoff. Headless --auto owns the auto start itself so it can
+  // wait for completion without racing the guided-flow pending auto-start.
+  setPendingAutoStart(basePath, {
+    ctx,
+    pi,
+    basePath,
+    milestoneId: nextId,
+    startAuto: options.startAutoAfterReady !== false,
+  });
 
   // Dispatch as discuss-milestone. The LLM writes PROJECT.md, REQUIREMENTS.md,
   // and CONTEXT.md, then calls gsd_plan_milestone — this is semantically the

@@ -70,6 +70,8 @@ const RESERVED_SUBCOMMANDS = new Set([
   "info", "install", "uninstall",
 ]);
 
+const HEADLESS_CHAIN_AUTO_FLAG = "--headless-chain-auto";
+
 const WORKFLOW_USAGE = [
   "Usage: /gsd workflow [<name> | <subcommand>]",
   "",
@@ -534,11 +536,14 @@ export async function handleWorkflowCommand(trimmed: string, ctx: ExtensionComma
       setPlanningDepth(basePath, "deep");
       ctx.ui.notify("Deep planning mode enabled (.gsd/PREFERENCES.md updated).", "info");
     }
+    const headlessChainAuto = args.split(/\s+/).includes(HEADLESS_CHAIN_AUTO_FLAG);
     const headlessContextPath = join(gsdRoot(basePath), "runtime", "headless-context.md");
     if (existsSync(headlessContextPath)) {
       const seedContext = readFileSync(headlessContextPath, "utf-8");
       try { unlinkSync(headlessContextPath); } catch { /* non-fatal */ }
-      await showHeadlessMilestoneCreation(ctx, pi, basePath, seedContext);
+      await showHeadlessMilestoneCreation(ctx, pi, basePath, seedContext, {
+        startAutoAfterReady: !headlessChainAuto,
+      });
     } else {
       const { showSmartEntry } = await import("../../guided-flow.js");
       await showSmartEntry(ctx, pi, basePath);
