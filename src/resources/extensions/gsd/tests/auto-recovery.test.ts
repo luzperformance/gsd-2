@@ -1270,6 +1270,20 @@ test("hasImplementationArtifacts treats empty non-integration branch diff as abs
   }
 });
 
+test("hasImplementationArtifacts returns unknown for empty integration self-diff without milestone evidence (#5071)", () => {
+  const base = makeGitBase();
+  try {
+    const result = hasImplementationArtifacts(base, "M001");
+    assert.equal(
+      result,
+      "unknown",
+      "integration self-diff retries without milestone evidence must fail open instead of blocking closeout",
+    );
+  } finally {
+    cleanup(base);
+  }
+});
+
 test("hasImplementationArtifacts uses milestone path history instead of rolling depth (#4699)", () => {
   const base = makeGitBase();
   try {
