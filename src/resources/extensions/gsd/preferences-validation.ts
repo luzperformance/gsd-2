@@ -1286,7 +1286,7 @@ export function validatePreferences(preferences: GSDPreferences): {
         ) {
           const repos = workspace.repositories as Record<string, unknown>;
           const validRepos: NonNullable<NonNullable<GSDPreferences["workspace"]>["repositories"]> = {};
-          const normalizedPaths = new Set<string>();
+          const normalizedPaths = new Map<string, string>();
 
           for (const [repoId, repoValue] of Object.entries(repos)) {
             if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(repoId)) {
@@ -1308,11 +1308,14 @@ export function validatePreferences(preferences: GSDPreferences): {
                 continue;
               }
               const normalizedPathKey = validRepo.path.replace(/\\/g, "/").replace(/^(\.\/)+/, "").replace(/\/+$/, "").toLowerCase();
-              if (normalizedPaths.has(normalizedPathKey)) {
-                errors.push(`workspace.repositories contains duplicate path: ${validRepo.path}`);
+              const existingRepoId = normalizedPaths.get(normalizedPathKey);
+              if (existingRepoId !== undefined) {
+                errors.push(
+                  `workspace.repositories.${repoId}.path duplicates workspace.repositories.${existingRepoId}.path: ${validRepo.path}`,
+                );
                 continue;
               }
-              normalizedPaths.add(normalizedPathKey);
+              normalizedPaths.set(normalizedPathKey, repoId);
             } else {
               errors.push(`workspace.repositories.${repoId}.path must be a non-empty string`);
               continue;

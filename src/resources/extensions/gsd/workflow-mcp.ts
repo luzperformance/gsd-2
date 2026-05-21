@@ -372,7 +372,7 @@ export function getRequiredWorkflowToolsForAutoUnit(unitType: string): string[] 
     case "gate-evaluate":
       return ["gsd_save_gate_result"];
     case "validate-milestone":
-      return ["gsd_milestone_status", "gsd_validate_milestone"];
+      return ["gsd_milestone_status", "gsd_validate_milestone", "gsd_reassess_roadmap"];
     case "complete-milestone":
       return ["gsd_milestone_status", "gsd_complete_milestone"];
     default:
