@@ -160,9 +160,49 @@ verification_auto_fix: true       # auto-retry on failure (default)
 verification_max_retries: 2       # max attempts (default: 2)
 ```
 
-Verification commands must be simple executable commands, not shell pipelines or scripts packed into one line. GSD rejects pipes (`|`), redirects (`>` and `<`), semicolons, backticks, and command substitution (`$(...)`) because verification is run as a controlled command list, not as an arbitrary shell program. Use `python3 -m pytest tests -q` instead of `python3 -m pytest tests -q 2>&1 | tail -5`.
+Verification commands must be simple executable commands. Shell piping (`|`) is supported, but logical OR (`||`) is rejected. GSD also rejects redirects (`>` and `<`), semicolons, backticks, and command substitution (`$(...)`) because verification is run as a controlled command list, not as an arbitrary shell program.
+
+For task-level `verify` commands (`taskPlanVerify`), GSD splits command chains on `&&` and validates each segment independently. On Unix-like systems, commands run with `set -o pipefail` semantics, so any failing stage in a pipeline causes the verification command to fail.
 
 When `verification_commands` is empty and no task-level `verify` command is available, GSD can auto-discover project checks. JavaScript projects use `package.json` scripts in this order: `typecheck`, `lint`, `test`. Python projects use the `python-project` discovery source and run `python3 -m pytest` when GSD finds explicit pytest evidence: `pytest.ini`, a pytest configuration section in `pyproject.toml` such as `[tool.pytest.ini_options]`, or files matching pytest's default test file patterns (`test_*.py` or `*_test.py`) under `tests/`.
+
+### `workspace`
+
+Multi-repository workspace configuration for parent projects:
+
+```yaml
+workspace:
+  mode: parent
+  repositories:
+    frontend:
+      path: apps/frontend
+      role: web
+      verification:
+        - pnpm -C apps/frontend test
+      commit_policy: auto
+    backend:
+      path: services/backend
+      role: api
+      verification:
+        - pnpm -C services/backend test
+      commit_policy: skip
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `workspace.mode` | `"project" \| "parent"` | `"project"` | Workspace operating mode. |
+| `workspace.repositories` | object | `{}` | Mapping of repository IDs to repository config. |
+| `workspace.repositories.<id>.path` | string | required | Child repository path, resolved relative to project root. Must stay inside the project root. |
+| `workspace.repositories.<id>.role` | string | optional | Human-oriented role label used in prompts/reporting. |
+| `workspace.repositories.<id>.verification` | string[] | optional | Default verification commands for that repository. |
+| `workspace.repositories.<id>.commit_policy` | `"auto" \| "skip"` | optional | Per-repository auto-mode turn-commit policy. |
+
+Validation rules:
+
+- Repository IDs must match `^[A-Za-z0-9][A-Za-z0-9._-]*$`.
+- Repository paths are normalized and must be unique (case-insensitive).
+- Paths resolving outside the project root are rejected.
+- Unknown `workspace` keys are ignored with warnings.
 
 ### `phases`
 

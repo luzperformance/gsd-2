@@ -145,15 +145,43 @@ Setting `prefer_skills: []` does **not** disable skill discovery — it just mea
   - **Deprecated:** `commit_docs` — no longer valid; `.gsd/` is always gitignored. Remove this setting.
   - **Deprecated:** `merge_to_main` — no longer valid; milestone-level merge is always used. Remove this setting.
 
-- `unique_milestone_ids`: boolean — when `true`, generates milestone IDs in `M{seq}-{rand6}` format (e.g. `M001-eh88as`) instead of plain sequential `M001`. Prevents ID collisions in team workflows where multiple contributors create milestones concurrently. Both formats coexist — existing `M001`-style milestones remain valid. Default: `false`.
+- `workspace`: configures multi-repository parent workspaces. Keys:
+  - `mode`: `"project"` (default single-repo behavior) or `"parent"` (one `.gsd` controlling child repos).
+  - `repositories`: object map of repository IDs to config.
+    - Repository ID format: `^[A-Za-z0-9][A-Za-z0-9._-]*$`.
+    - Reserved ID: `project` is implicit and always maps to the project root; user-defined `workspace.repositories.project` is rejected.
+    - `path`: required relative path that must resolve within the project root (paths escaping via `..` are rejected).
+    - `role`: optional short description of what the repo owns.
+    - `verification`: optional array of verification commands for that repo.
+    - `commit_policy`: optional `"auto"` or `"skip"` to include or skip commit actions per repo.
 
-- `workspace`: optional parent-workspace repository registry. Keys:
-  - `mode`: `"project"` or `"parent"` — registry mode for repository lookup. Default: `"project"`.
-  - `repositories`: object keyed by repository id. A default `"project"` repository pointing at the project root is always available, even when not listed here (and can be overridden by explicitly defining `"project"`). Each repository supports:
-    - `path`: string — repository root path relative to project root.
-    - `role`: string — optional human label for prompts/reporting.
-    - `verification`: string[] — optional default verification commands.
-    - `commit_policy`: `"auto"` or `"skip"` — optional turn-commit policy for auto-mode commit actions. Defaults to `"auto"` when omitted. `"skip"` suppresses commit execution for that target repo.
+## Workspace Example
+
+```yaml
+---
+version: 1
+workspace:
+  mode: parent
+  repositories:
+    frontend:
+      path: frontend
+      role: web UI
+      verification:
+        - npm test
+        - npm run lint
+      commit_policy: auto
+    backend:
+      path: ./backend
+      role: API server
+      verification:
+        - go test ./...
+      commit_policy: auto
+---
+```
+
+This config sets a parent workspace with two child repositories. The implicit `project` repository is always created for the project root and cannot be user-defined.
+
+- `unique_milestone_ids`: boolean — when `true`, generates milestone IDs in `M{seq}-{rand6}` format (e.g. `M001-eh88as`) instead of plain sequential `M001`. Prevents ID collisions in team workflows where multiple contributors create milestones concurrently. Both formats coexist — existing `M001`-style milestones remain valid. Default: `false`.
 
 - `budget_ceiling`: number — maximum dollar amount to spend on auto-mode. When reached, behavior is controlled by `budget_enforcement`. Default: no limit.
 
@@ -163,7 +191,7 @@ Setting `prefer_skills: []` does **not** disable skill discovery — it just mea
   - `halt` — stop auto-mode immediately.
   - Default: `"pause"`.
 
-- `context_pause_threshold`: number (0-100) — context window usage percentage at which auto-mode should pause to suggest checkpointing. Set to `0` to disable. Default: `0` (disabled).
+- `context_pause_threshold`: number (`0` or `1-100`) — live context window usage percentage at which auto-mode should pause to suggest checkpointing. Set to `0` to disable. Use whole percentages like `75`, not fractional ratios like `0.75`. Default: `0` (disabled).
 
 - `token_profile`: `"budget"`, `"balanced"`, `"quality"`, or `"burn-max"` — coordinates model selection, phase skipping, and context compression. `budget` skips research/reassessment and uses cheaper models; `balanced` (default) skips research/reassessment to reduce token burn; `quality` prefers higher-quality models; `burn-max` keeps full-context defaults, disables downgrade routing, and keeps phase skips off.
 
@@ -248,6 +276,16 @@ Setting `prefer_skills: []` does **not** disable skill discovery — it just mea
   - `merge_strategy`: `"per-slice"` or `"per-milestone"` — when to merge worktree results back. Default: `"per-milestone"`.
   - `auto_merge`: `"auto"`, `"confirm"`, or `"manual"` — merge behavior after completion. `"auto"` merges immediately; `"confirm"` asks first; `"manual"` leaves branches for you. Default: `"confirm"`.
   - `worker_model`: string — optional model override for parallel milestone workers. When set, workers use this model (e.g. `"claude-haiku-4-5"`) instead of inheriting the coordinator's model. Useful for cost savings on execution-heavy milestones.
+
+- `workspace`: repository-scoping for parent/multi-repo workspaces. Keys:
+  - `mode`: `"project"` | `"parent"` — enables single-repo (default) or parent workspace behavior.
+  - `repositories`: map of repository IDs to repository config:
+    - `path`: string (required) — path relative to project root.
+    - `role`: string (optional) — informational role label.
+    - `verification`: string[] (optional) — repository-specific verification commands used when global `verification_commands` is not set.
+    - `commit_policy`: `"auto"` | `"skip"` (optional) — per-repository closeout commit behavior.
+  - `project` is always an implicit repository target mapped to the project root for backward compatibility.
+  - Plan/task `targetRepositories` defaults to `["project"]` when omitted.
 
 - `verification_commands`: string[] — shell commands to run as verification after task execution (e.g., `["npm test", "npm run lint"]`). Commands run in order; if any fails, the task is marked as needing fixes.
 

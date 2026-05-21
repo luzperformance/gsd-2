@@ -43,11 +43,11 @@ describe("db-task-slice-rows", () => {
       proof_level: "",
       integration_closure: "",
       observability_impact: "",
+      target_repositories: [],
       sequence: 0,
       replan_triggered_at: null,
       is_sketch: 0,
       sketch_scope: "",
-      target_repositories: [],
     });
   });
 
@@ -119,6 +119,7 @@ describe("db-task-slice-rows", () => {
     assert.deepEqual(task.files, []);
     assert.deepEqual(task.inputs, []);
     assert.deepEqual(task.expected_output, []);
+    assert.deepEqual(task.target_repositories, []);
     assert.equal(task.sequence, 0);
     assert.equal(task.blocker_source, "");
     assert.equal(task.escalation_pending, 0);

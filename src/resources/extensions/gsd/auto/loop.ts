@@ -15,7 +15,8 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AutoSession } from "./session.js";
-import type { LoopDeps } from "./loop-deps.js";
+import type { LoopDeps, StopAutoOptions } from "./loop-deps.js";
+import type { GSDState } from "../types.js";
 import {
   MAX_LOOP_ITERATIONS,
   type LoopState,
@@ -104,6 +105,7 @@ import {
 } from "./workflow-custom-engine-verify-outcome.js";
 import { handleCustomEngineReconcile } from "./workflow-custom-engine-reconcile.js";
 import { handleCustomEngineReconcileOutcome } from "./workflow-custom-engine-reconcile-outcome.js";
+import { formatLeaseConflictNotice } from "./lease-conflict-notice.js";
 
 /**
  * Returns true if workerId is an active worker in this project whose OS
@@ -126,6 +128,23 @@ function isDeadLocalLeaseHolder(workerId: string, projectRoot: string): boolean 
   }
 }
 
+function resolveCompletionStopFromState(
+  stateSnapshot: GSDState | undefined,
+): { reason: string; options: StopAutoOptions } | null {
+  if (stateSnapshot?.phase !== "complete") return null;
+  const completedMilestone = stateSnapshot.lastCompletedMilestone ?? stateSnapshot.activeMilestone;
+  return {
+    reason: "All milestones complete",
+    options: {
+      completionWidget: {
+        milestoneId: completedMilestone?.id ?? null,
+        milestoneTitle: completedMilestone?.title ?? null,
+        allMilestonesComplete: true,
+      },
+    },
+  };
+}
+
 // ── Stuck detection persistence (#3704) ──────────────────────────────────
 // Phase C migration: stuck-state.json deleted in favor of DB-backed
 // equivalents. recentUnits is rebuilt from unit_dispatches (Phase B
@@ -137,6 +156,7 @@ function isDeadLocalLeaseHolder(workerId: string, projectRoot: string): boolean 
 // helpers degrade to the empty-state fallback that #3704 already
 // tolerates — same behavior as a fresh session.
 const STUCK_RECOVERY_ATTEMPTS_KEY = "stuck_recovery_attempts";
+const MAX_CONSECUTIVE_ALREADY_ACTIVE_SKIPS = 3;
 
 function stableStuckStateScopeId(s: AutoSession): string {
   return normalizeRealPath(s.scope?.workspace.projectRoot ?? (s.originalBasePath || s.basePath));
@@ -222,6 +242,18 @@ function logCustomVerifyRetryLoadFailure(err: unknown): void {
   debugLog("autoLoop", {
     phase: "load-custom-verify-retries-failed",
     error: err instanceof Error ? err.message : String(err),
+  });
+}
+
+function leaseConflictNotice(
+  iterData: IterationData,
+  reason: string,
+): string {
+  return formatLeaseConflictNotice({
+    milestoneId: iterData.mid,
+    unitType: iterData.unitType,
+    unitId: iterData.unitId,
+    reason,
   });
 }
 
@@ -350,6 +382,7 @@ export async function autoLoop(
   };
   let consecutiveErrors = 0;
   let consecutiveCooldowns = 0;
+  let consecutiveAlreadyActiveSkips = 0;
   const recentErrorMessages: string[] = [];
 
   while (s.active) {
@@ -681,6 +714,17 @@ export async function autoLoop(
           finishTurn("stopped", "execution", "unit-break");
           break;
         }
+        if (unitPhaseResult.action === "retry") {
+          finishIncompleteIteration({
+            status: "retry",
+            reason: unitPhaseResult.reason,
+            retry: true,
+            unitType: iterData.unitType,
+            unitId: iterData.unitId,
+          });
+          finishTurn("retry", "execution", unitPhaseResult.reason);
+          continue;
+        }
 
         // ── Verify first, then reconcile (only mark complete on pass) ──
         debugLog("autoLoop", { phase: "custom-engine-verify", iteration, unitId: iterData.unitId });
@@ -824,7 +868,12 @@ export async function autoLoop(
 
           if (orchestrationResult.kind === "stopped") {
             s.pendingOrchestrationDispatch = null;
-            await deps.stopAuto(ctx, pi, orchestrationResult.reason);
+            const completionStop = resolveCompletionStopFromState(orchestrationResult.stateSnapshot);
+            if (completionStop) {
+              await deps.stopAuto(ctx, pi, completionStop.reason, completionStop.options);
+            } else {
+              await deps.stopAuto(ctx, pi, orchestrationResult.reason);
+            }
             finishTurn("stopped", "manual-attention", "orchestration-stopped");
             break;
           }
@@ -862,7 +911,13 @@ export async function autoLoop(
             break;
           }
           if (preDispatchResult.action === "continue") {
+            emitIterationEnd({ skipped: true });
+            completeIteration();
             finishTurn("skipped");
+            continue;
+          }
+          if (preDispatchResult.action === "retry") {
+            finishTurn("retry", "execution", preDispatchResult.reason);
             continue;
           }
           const preData = preDispatchResult.data;
@@ -879,7 +934,13 @@ export async function autoLoop(
             break;
           }
           if (dispatchResult.action === "continue") {
+            emitIterationEnd({ skipped: true });
+            completeIteration();
             finishTurn("skipped");
+            continue;
+          }
+          if (dispatchResult.action === "retry") {
+            finishTurn("retry", "execution", dispatchResult.reason);
             continue;
           }
           iterData = dispatchResult.data;
@@ -933,7 +994,7 @@ export async function autoLoop(
           if (retryLease.kind === "ready") {
             leaseBeforeClaim = retryLease;
           } else {
-            const msg = `Lost milestone lease for ${iterData.mid ?? "unknown"} before dispatching ${iterData.unitType} ${iterData.unitId}: ${retryLease.reason}`;
+            const msg = leaseConflictNotice(iterData, retryLease.reason);
             ctx.ui.notify(msg, "error");
             finishTurn("stopped", "execution", msg);
             await deps.stopAuto(ctx, pi, msg);
@@ -942,7 +1003,7 @@ export async function autoLoop(
         }
       }
       if (leaseBeforeClaim.kind === "blocked" || leaseBeforeClaim.kind === "failed") {
-        const msg = `Lost milestone lease for ${iterData.mid ?? "unknown"} before dispatching ${iterData.unitType} ${iterData.unitId}: ${leaseBeforeClaim.reason}`;
+        const msg = leaseConflictNotice(iterData, leaseBeforeClaim.reason);
         ctx.ui.notify(msg, "error");
         finishTurn("stopped", "execution", msg);
         await deps.stopAuto(ctx, pi, msg);
@@ -985,7 +1046,7 @@ export async function autoLoop(
                 : { kind: "degraded" },
           );
         } else {
-          const msg = `Lost milestone lease for ${iterData.mid ?? "unknown"} while claiming ${iterData.unitType} ${iterData.unitId}: ${leaseRecovery.reason}`;
+          const msg = leaseConflictNotice(iterData, leaseRecovery.reason);
           ctx.ui.notify(msg, "error");
           finishTurn("stopped", "execution", msg);
           await deps.stopAuto(ctx, pi, msg);
@@ -994,15 +1055,35 @@ export async function autoLoop(
       }
       if (dispatchDecision.action === "skip") {
         if (dispatchDecision.reason === "stale-lease") {
-          const msg = `Lost milestone lease for ${iterData.mid ?? "unknown"} while claiming ${iterData.unitType} ${iterData.unitId}; dispatch claim still failed after recovery.`;
+          consecutiveAlreadyActiveSkips = 0;
+          const msg = leaseConflictNotice(iterData, "dispatch claim still failed after stale-lease recovery");
           ctx.ui.notify(msg, "error");
           finishTurn("stopped", "execution", msg);
           await deps.stopAuto(ctx, pi, msg);
           break;
         }
+        if (dispatchDecision.reason === "already-active" || dispatchDecision.reason === "already_active") {
+          consecutiveAlreadyActiveSkips++;
+          if (consecutiveAlreadyActiveSkips >= MAX_CONSECUTIVE_ALREADY_ACTIVE_SKIPS) {
+            const msg = `Dispatch claim for ${iterData.unitType} ${iterData.unitId} remained already-active for ${consecutiveAlreadyActiveSkips} consecutive attempts. Pausing auto-mode for manual recovery.`;
+            ctx.ui.notify(msg, "error");
+            await deps.pauseAuto(ctx, pi);
+            finishTurn("paused", "manual-attention", msg);
+            break;
+          }
+        } else {
+          consecutiveAlreadyActiveSkips = 0;
+        }
         finishTurn("skipped", "execution", dispatchDecision.reason);
+        finishIncompleteIteration({
+          status: "skipped",
+          reason: dispatchDecision.reason,
+          unitType: iterData.unitType,
+          unitId: iterData.unitId,
+        });
         continue;
       }
+      consecutiveAlreadyActiveSkips = 0;
       dispatchId = dispatchDecision.dispatchId;
 
       let unitPhaseResult: Awaited<ReturnType<typeof runUnitPhaseViaContract>>;
@@ -1052,6 +1133,21 @@ export async function autoLoop(
         });
         finishTurn("stopped", "execution", "unit-break");
         break;
+      }
+      if (unitPhaseResult.action === "retry") {
+        dispatchSettled = settleDispatchFailed(dispatchId, unitPhaseResult.reason, {
+          markFailed: markDispatchFailed,
+          logWriteFailure: logDispatchLedgerWriteFailure,
+        }) || dispatchSettled;
+        finishIncompleteIteration({
+          status: "retry",
+          reason: unitPhaseResult.reason,
+          retry: true,
+          unitType: iterData.unitType,
+          unitId: iterData.unitId,
+        });
+        finishTurn("retry", "execution", unitPhaseResult.reason);
+        continue;
       }
 
       // ── Phase 5: Finalize ───────────────────────────────────────────────
@@ -1130,6 +1226,10 @@ export async function autoLoop(
           markFailed: markDispatchFailed,
           logWriteFailure: logDispatchLedgerWriteFailure,
         }) || dispatchSettled;
+        await s.orchestration?.retryActiveUnit({
+          unitType: iterData.unitType,
+          unitId: iterData.unitId,
+        });
         finishIncompleteIteration({
           status: "retry",
           reason: "finalize-retry",
@@ -1145,6 +1245,10 @@ export async function autoLoop(
         markCompleted: markDispatchCompleted,
         logWriteFailure: logDispatchLedgerWriteFailure,
       }) || dispatchSettled;
+      await s.orchestration?.completeActiveUnit({
+        unitType: iterData.unitType,
+        unitId: iterData.unitId,
+      });
       completeIteration();
       stuckStatePersistedThisIteration = true;
       finishTurn("completed");
@@ -1276,6 +1380,10 @@ export async function autoLoop(
         ctx.ui.notify(cooldownDecision.notifyMessage, "warning");
         await new Promise(resolve => setTimeout(resolve, cooldownDecision.waitMs));
         finishTurn("retry", "timeout", msg);
+        finishIncompleteIteration({
+          status: "retry",
+          reason: "cooldown-retry",
+        });
         continue; // Retry iteration without incrementing consecutiveErrors
       }
 
