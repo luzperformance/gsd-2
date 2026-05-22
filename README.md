@@ -10,19 +10,3 @@ https://github.com/open-gsd/gsd-pi
 
 Use the new repository for current source code, issues, releases, and contribution
 work.
-
-## Install
-
-```bash
-npm install -g gsd-pi
-```
-
-## Start
-
-```bash
-gsd
-```
-
-For current setup and usage docs, see the README in the new repository:
-
-https://github.com/open-gsd/gsd-pi#readme
